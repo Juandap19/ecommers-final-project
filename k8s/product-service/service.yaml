@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  labels:
+    app: product-service
+spec:
+  selector:
+    app: product-service # Debe coincidir con las etiquetas del Pod del Deployment
+  ports:
+    - protocol: TCP
+      port: 8500 # Puerto por el que el Service es accesible DENTRO del cluster
+      targetPort: 8500 # Puerto en el que el Pod está escuchando (containerPort)
+  type: ClusterIP # O LoadBalancer si necesitas acceso externo directo 

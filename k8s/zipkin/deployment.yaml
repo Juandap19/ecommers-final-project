@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zipkin
+  labels:
+    app: zipkin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zipkin
+  template:
+    metadata:
+      labels:
+        app: zipkin
+    spec:
+      containers:
+      - name: zipkin
+        image: openzipkin/zipkin # Official Zipkin image
+        ports:
+        - containerPort: 9411
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+          requests:
+            memory: "128Mi"
+            cpu: "80m"
+        readinessProbe:
+          httpGet:
+            path: /health # Correct health endpoint for Zipkin
+            port: 9411
+          initialDelaySeconds: 200
+          periodSeconds: 15
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health # Correct health endpoint for Zipkin
+            port: 9411
+          initialDelaySeconds: 200
+          periodSeconds: 30
+          timeoutSeconds: 5 

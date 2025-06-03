@@ -1,0 +1,10 @@
+version: '3'
+services:
+  service-discovery-container:
+    image: minichocolate/locust-service:latest
+    ports:
+      - 8089:8089
+
+
+
+

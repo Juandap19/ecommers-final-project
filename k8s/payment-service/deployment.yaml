@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  labels:
+    app: payment-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+        - name: payment-service
+          image: minichocolate/payment-service:latest
+          ports:
+            - containerPort: 8400
+          # resources:
+          #   requests:
+          #     memory: "128Mi"
+          #     cpu: "80m"
+          #   limits:
+          #     memory: "384Mi"
+          #     cpu: "250m"
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
+            - name: SPRING_ZIPKIN_BASE_URL
+              value: "http://zipkin:9411/"
+            - name: SPRING_CONFIG_IMPORT
+              value: "optional:configserver:http://cloud-config:9296"
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: "http://service-discovery:8761/eureka/"
+            - name: EUREKA_INSTANCE
+              value: "payment-service"
+           
+            - name: SPRING_APPLICATION_NAME
+              value: "PAYMENT-SERVICE"
+            - name: SERVER_PORT
+              value: "8400"
+            - name: SERVER_SERVLET_CONTEXT_PATH
+              value: "/payment-service"
+          # volumeMounts:
+          #   - name: config-volume
+          #     mountPath: /etc/config
+          # Opcional: Liveness and Readiness Probes
+          livenessProbe:
+            httpGet:
+              path: /payment-service/actuator/health
+              port: 8400
+            initialDelaySeconds: 200 # Tiempo para que el servicio inicie completamente
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /payment-service/actuator/health
+              port: 8400
+            initialDelaySeconds: 200
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: common-config-volume
+              mountPath: /app/config
+      volumes:
+        - name: common-config-volume
+          configMap:
+            name: common-config

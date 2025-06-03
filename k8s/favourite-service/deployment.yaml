@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: favourite-service
+  labels:
+    app: favourite-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: favourite-service
+  template:
+    metadata:
+      labels:
+        app: favourite-service
+    spec:
+      containers:
+      - name: favourite-service
+        image: minichocolate/favourite-service:latest
+        ports:
+        - containerPort: 8800
+        # resources:
+        #   requests:
+        #     memory: "256Mi"
+        #     cpu: "80m"
+        #   limits:
+        #     memory: "384Mi"
+        #     cpu: "250m"
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "dev"
+        - name: SPRING_ZIPKIN_BASE_URL
+          value: "http://zipkin:9411/"
+        - name: SPRING_CONFIG_IMPORT
+          value: "optional:configserver:http://cloud-config:9296"
+        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+          value: "http://service-discovery:8761/eureka/"
+        - name: EUREKA_INSTANCE
+          value: "favourite-service"
+
+          
+        - name: SPRING_APPLICATION_NAME
+          value: "FAVOURITE-SERVICE"
+        - name: SERVER_PORT
+          value: "8800"
+        - name: SERVER_SERVLET_CONTEXT_PATH
+          value: "/favourite-service"
+        # # Variables adicionales para base de datos
+        # - name: SPRING_DATASOURCE_URL
+        #   value: "jdbc:h2:mem:ecommerce_dev_db;DB_CLOSE_ON_EXIT=FALSE"
+        # - name: SPRING_DATASOURCE_USERNAME
+        #   value: "sa"
+        # - name: SPRING_DATASOURCE_PASSWORD
+        #   value: ""
+        livenessProbe:
+          httpGet:
+            path: /favourite-service/actuator/health
+            port: 8800
+          initialDelaySeconds: 200
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /favourite-service/actuator/health
+            port: 8800
+          initialDelaySeconds: 200
+          periodSeconds: 10
+          failureThreshold: 3
+        volumeMounts:
+        - name: common-config-volume
+          mountPath: /app/config
+      volumes:
+      - name: common-config-volume
+        configMap:
+          name: common-config 

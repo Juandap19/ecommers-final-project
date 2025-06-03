@@ -1,0 +1,198 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: common-config
+data:
+  # Configuración común para todos los microservicios
+  common-services.properties: |
+    # URLs de servicios (usadas por microservicios regulares)
+    spring.zipkin.base-url=http://zipkin-service:9411/
+    spring.config.import=optional:configserver:http://cloud-config:9296
+    eureka.client.serviceUrl.defaultZone=http://service-discovery:8761/eureka/
+    eureka.client.register-with-eureka=true
+    eureka.client.fetch-registry=true
+    
+    # Configuración de base de datos H2
+    spring.datasource.url=jdbc:h2:mem:ecommerce_dev_db;DB_CLOSE_ON_EXIT=FALSE
+    spring.datasource.username=sa
+    spring.datasource.password=
+    spring.jpa.show-sql=true
+    spring.jpa.hibernate.ddl-auto=validate
+    spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect
+    spring.jpa.properties.hibernate.use_sql_comments=true
+    spring.jpa.properties.hibernate.format_sql=true
+    spring.h2.console.enabled=true
+    spring.h2.console.path=/h2-console
+    
+    # Actuator y Management
+    management.endpoints.web.exposure.include=*
+    management.health.circuitbreakers.enabled=true
+    management.endpoint.health.show-details=always
+    
+    # Logging
+    logging.level.org.springframework.web=INFO
+    logging.level.org.springframework.data=INFO
+  
+  # Configuración específica para los servicios de infraestructura
+  infrastructure-services.properties: |
+    # Configuración para service-discovery y cloud-config
+    spring.zipkin.base-url=http://zipkin-service:9411/
+    spring.zipkin.enabled=false
+    spring.cloud.config.enabled=false
+    # No usar config server en servicios de infraestructura
+    spring.config.import=optional:file:/etc/config/
+    eureka.client.register-with-eureka=false
+    eureka.client.fetch-registry=false
+    
+    # Actuator y Management
+    management.endpoints.web.exposure.include=*
+    management.health.circuitbreakers.enabled=true
+    management.endpoint.health.show-details=always
+    
+    # Logging
+    logging.level.org.springframework.web=INFO
+    logging.level.org.springframework.cloud=INFO
+    
+  # Configuración específica para API Gateway
+  api-gateway.properties: |
+    server.port=8080
+    server.servlet.context-path=/
+    server.error.whitelabel.enabled=false
+    spring.application.name=API-GATEWAY
+    
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.apiGateway.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.apiGateway.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.apiGateway.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.apiGateway.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.apiGateway.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.apiGateway.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.apiGateway.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.apiGateway.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.apiGateway.sliding-window-type=COUNT_BASED
+    
+  # Configuración específica para Order Service
+  order-service.properties: |
+    server.port=8300
+    server.servlet.context-path=/order-service
+    spring.application.name=ORDER-SERVICE
+    
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.orderService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.orderService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.orderService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.orderService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.orderService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.orderService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.orderService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.orderService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.orderService.sliding-window-type=COUNT_BASED
+    
+  # Configuración específica para Favourite Service
+  favourite-service.properties: |
+    server.port=8800
+    server.servlet.context-path=/favourite-service
+    spring.application.name=FAVOURITE-SERVICE
+    
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.favouriteService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.favouriteService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.favouriteService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.favouriteService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.favouriteService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.favouriteService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.favouriteService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.favouriteService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.favouriteService.sliding-window-type=COUNT_BASED
+    
+  # Configuración específica para Payment Service
+  payment-service.properties: |
+    server.port=8400
+    server.servlet.context-path=/payment-service
+    spring.application.name=PAYMENT-SERVICE
+    
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.paymentService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.paymentService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.paymentService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.paymentService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.paymentService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.paymentService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.paymentService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.paymentService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.paymentService.sliding-window-type=COUNT_BASED
+
+  # Configuración específica para Product Service
+  product-service.properties: |
+    server.port=8500
+    server.servlet.context-path=/product-service
+    spring.application.name=PRODUCT-SERVICE
+
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.productService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.productService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.productService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.productService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.productService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.productService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.productService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.productService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.productService.sliding-window-type=COUNT_BASED
+
+  # Configuración específica para Proxy Client
+  proxy-client.properties: |
+    server.port=8900
+    server.servlet.context-path=/app
+    spring.application.name=PROXY-CLIENT
+
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.proxyService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.proxyService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.proxyService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.proxyService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.proxyService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.proxyService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.proxyService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.proxyService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.proxyService.sliding-window-type=COUNT_BASED
+
+  # Configuración específica para Shipping Service
+  shipping-service.properties: |
+    server.port=8600
+    server.servlet.context-path=/shipping-service
+    spring.application.name=SHIPPING-SERVICE
+
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.shippingService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.shippingService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.shippingService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.shippingService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.shippingService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.shippingService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.shippingService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.shippingService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.shippingService.sliding-window-type=COUNT_BASED
+
+  # Configuración específica para User Service
+  user-service.properties: |
+    server.port=8700
+    server.servlet.context-path=/user-service
+    spring.application.name=USER-SERVICE
+
+    # Configuración de circuit breaker
+    resilience4j.circuitbreaker.instances.userService.register-health-indicator=true
+    resilience4j.circuitbreaker.instances.userService.event-consumer-buffer-size=10
+    resilience4j.circuitbreaker.instances.userService.automatic-transition-from-open-to-half-open-enabled=true
+    resilience4j.circuitbreaker.instances.userService.failure-rate-threshold=50
+    resilience4j.circuitbreaker.instances.userService.minimum-number-of-calls=5
+    resilience4j.circuitbreaker.instances.userService.permitted-number-of-calls-in-half-open-state=3
+    resilience4j.circuitbreaker.instances.userService.sliding-window-size=10
+    resilience4j.circuitbreaker.instances.userService.wait-duration-in-open-state=5s
+    resilience4j.circuitbreaker.instances.userService.sliding-window-type=COUNT_BASED
+    
+  # Configuración específica para Service Discovery
+  service-discovery.properties: |
+    server.port=8761
+    eureka.client.register-with-eureka=false
+    eureka.client.fetch-registry=false
+    eureka.server.wait-time-in-ms-when-sync-empty=0 

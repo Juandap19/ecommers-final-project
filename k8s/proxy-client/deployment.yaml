@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy-client
+  labels:
+    app: proxy-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy-client
+  template:
+    metadata:
+      labels:
+        app: proxy-client
+    spec:
+      containers:
+        - name: proxy-client
+          image: minichocolate/proxy-client:latest
+          # imagePullPolicy: IfNotPresent # O Always si la imagen se actualiza frecuentemente en el registry
+          ports:
+            - containerPort: 8900
+          # resources:
+          #   requests:
+          #     memory: "128Mi"
+          #     cpu: "80m"
+          #   limits:
+          #     memory: "384Mi"
+          #     cpu: "250m"
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
+            - name: SPRING_ZIPKIN_BASE_URL
+              value: "http://zipkin:9411/"
+            - name: SPRING_CONFIG_IMPORT
+              value: "optional:configserver:http://cloud-config:9296"
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: "http://service-discovery:8761/eureka/"
+            - name: EUREKA_INSTANCE
+              value: "proxy-client"
+
+            - name: SPRING_APPLICATION_NAME
+              value: "PROXY-CLIENT"
+            - name: SERVER_PORT
+              value: "8900"
+            - name: SERVER_SERVLET_CONTEXT_PATH
+              value: "/proxy-client"
+
+          #   - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+          #     value: "file:/etc/config/common-services.properties,file:/etc/config/proxy-client.properties"
+          # volumeMounts:
+          #   - name: config-volume
+          #     mountPath: /etc/config
+          # # Opcional: Liveness and Readiness Probes
+          livenessProbe:
+            httpGet:
+              path: /app/actuator/health
+              port: 8900
+            initialDelaySeconds: 200 
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /app/actuator/health
+              port: 8900
+            initialDelaySeconds: 200
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+          - name: common-config-volume
+            mountPath: /app/config
+      volumes:
+      - name: common-config-volume
+        configMap:
+          name: common-config

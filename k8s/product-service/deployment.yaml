@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  labels:
+    app: product-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      containers:
+        - name: product-service
+          image: minichocolate/product-service:latest
+          # imagePullPolicy: IfNotPresent # O Always si la imagen se actualiza frecuentemente en el registry
+          ports:
+            - containerPort: 8500
+          # resources:
+          #   requests:
+          #     memory: "128Mi"
+          #     cpu: "80m"
+          #   limits:
+          #     memory: "384Mi"
+          #     cpu: "250m"
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
+            - name: SPRING_ZIPKIN_BASE_URL
+              value: "http://zipkin:9411/"
+            - name: SPRING_CONFIG_IMPORT
+              value: "optional:configserver:http://cloud-config:9296"
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: "http://service-discovery:8761/eureka/"
+            - name: EUREKA_INSTANCE
+              value: "product-service"
+
+
+            - name: SPRING_APPLICATION_NAME
+              value: "PRODUCT-SERVICE"
+            - name: SERVER_PORT
+              value: "8500"
+            - name: SERVER_SERVLET_CONTEXT_PATH
+              value: "/product-service"
+
+            # - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+            #   value: "file:/etc/config/common-services.properties,file:/etc/config/product-service.properties"
+          livenessProbe:
+            httpGet:
+              path: /product-service/actuator/health # Ajusta la ruta según tu configuración de actuator
+              port: 8500
+            initialDelaySeconds: 200 # Tiempo para que el servicio inicie completamente
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /product-service/actuator/health # Ajusta la ruta según tu configuración de actuator
+              port: 8500
+            initialDelaySeconds: 200
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+          - name: common-config-volume
+            mountPath: /app/config
+      volumes:
+          - name: common-config-volume
+            configMap:
+              name: common-config 

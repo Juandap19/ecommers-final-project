@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipping-service
+  labels:
+    app: shipping-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shipping-service
+  template:
+    metadata:
+      labels:
+        app: shipping-service
+    spec:
+      containers:
+        - name: shipping-service
+          image:  minichocolate/shipping-service:latest
+          # imagePullPolicy: IfNotPresent 
+          ports:
+            - containerPort: 8600
+          # resources:
+          #   requests:
+          #     memory: "128Mi"
+          #     cpu: "80m"
+          #   limits:
+          #     memory: "384Mi"
+          #     cpu: "250m"
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev" 
+            - name: SPRING_ZIPKIN_BASE_URL
+              value: "http://zipkin:9411/"
+            - name: SPRING_CONFIG_IMPORT
+              value: "optional:configserver:http://cloud-config:9296"
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: "http://service-discovery:8761/eureka/"
+            - name: EUREKA_INSTANCE
+              value: "shipping-service"
+
+
+            - name: SPRING_APPLICATION_NAME
+              value: "SHIPPING-SERVICE"
+            - name: SERVER_PORT
+              value: "8600"
+            - name: SERVER_SERVLET_CONTEXT_PATH
+          #     value: "/shipping-service"
+          #   - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+          #     value: "file:/etc/config/common-services.properties,file:/etc/config/shipping-service.properties"
+          # volumeMounts:
+          #   - name: config-volume
+          #     mountPath: /etc/config
+          livenessProbe:
+            httpGet:
+              path: /shipping-service/actuator/health 
+              port: 8600
+            initialDelaySeconds: 200
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /shipping-service/actuator/health 
+              port: 8600
+            initialDelaySeconds: 200
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: common-config-volume
+              mountPath: /app/config
+      volumes:
+        - name: common-config-volume
+          configMap:
+            name: common-config

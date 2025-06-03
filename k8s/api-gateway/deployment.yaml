@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: api-gateway
+ #namespace: ecommerce-app
+ labels:
+   app: api-gateway
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: api-gateway
+ template:
+   metadata:
+     labels:
+       app: api-gateway
+   spec:
+     containers:
+     - name: api-gateway
+       image: minichocolate/api-gateway:latest
+       ports:
+       - containerPort: 8080
+#        resources:
+#          requests:
+#            memory: "384Mi"
+#            cpu: "250m"
+#          limits:
+#            memory: "384Mi"
+#            cpu: "250m"
+       env:
+       - name: SPRING_PROFILES_ACTIVE
+         value: "dev"
+       - name: SPRING_ZIPKIN_BASE_URL
+         value: "http://zipkin:9411/"
+       - name: SPRING_CONFIG_IMPORT
+         value: "optional:configserver:http://cloud-config:9296"
+       - name: EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE
+         value: "http://service-discovery:8761/eureka"
+       - name: EUREKA_INSTANCE
+         value: "api-gateway"
+
+
+       livenessProbe:
+         httpGet:
+           path: /actuator/health
+           port: 8080
+         initialDelaySeconds: 200
+         periodSeconds: 10
+         failureThreshold: 3
+       readinessProbe:
+         httpGet:
+           path: /actuator/health
+           port: 8080
+         initialDelaySeconds: 60
+         periodSeconds: 5
+         failureThreshold: 3
+       volumeMounts:
+       - name: common-config-volume
+         mountPath: /app/config
+     volumes:
+     - name: common-config-volume
+       configMap:
+         name: common-config
