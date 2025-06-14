@@ -57,6 +57,7 @@ pipeline {
         stage('Compile') {
             steps {
                 script {
+                    sh 'chmod +x mvnw' 
                     buildStages.compileProject()
                 }
             }
@@ -200,16 +201,21 @@ pipeline {
     post {
         always {
             script {
-                notificationStages.sendBuildNotification(
-                    currentBuild.result ?: 'SUCCESS',
-                    env.EMAIL_RECIPIENTS,
-                    env.SERVICES_TO_BUILD,
-                    env.SEMANTIC_VERSION
-                )
+                // Check the build status and call the correct notification function
+                if (currentBuild.result == 'SUCCESS') {
+                    notificationStages.sendSuccessNotification()
+                } else if (currentBuild.result == 'FAILURE') {
+                    notificationStages.sendFailureNotification()
+                } else if (currentBuild.result == 'UNSTABLE') {
+                    notificationStages.sendUnstableNotification()
+                } else if (currentBuild.result == 'ABORTED') {
+                    notificationStages.sendAbortedNotification()
+                }
             }
         }
         cleanup {
-            cleanWs()
+            // This calls the cleanup function from your library, which is good practice
+            notificationStages.cleanup()
         }
     }
 }
