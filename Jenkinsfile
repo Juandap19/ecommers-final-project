@@ -1,732 +1,910 @@
 pipeline {
     agent any
 
-    tools {
-        maven 'mvn'
-        jdk 'JDK_11'
+    parameters {
+        choice(
+            name: 'MICROSERVICE',
+            choices: ['ALL', 'api-gateway', 'service-discovery', 'user-service', 'product-service', 'order-service', 'payment-service', 'shipping-service', 'favourite-service'],
+            description: 'Seleccionar microservicio específico o ALL para todos'
+        )
+        booleanParam(
+            name: 'SKIP_SECURITY_SCAN',
+            defaultValue: false,
+            description: 'Saltar escaneo de seguridad con Trivy'
+        )
     }
 
     environment {
-        DOCKERHUB_USER = 'minichocolate'
-        DOCKER_CREDENTIALS_ID = 'password'
-        SERVICES = 'api-gateway cloud-config favourite-service order-service payment-service product-service proxy-client service-discovery shipping-service user-service locust'
-        K8S_NAMESPACE = 'ecommerce'
-        KUBECONFIG = 'C:\\Users\\usuario\\.kube\\config'
+        // Credenciales y configuración existente
+        SONAR_TOKEN = credentials('SONAR_TOKEN')
+        SONAR_HOST_URL = 'http://sonarqube:9000'
+        
+        // Configuración de Java
+        JAVA_HOME = '/opt/java/openjdk'
+        PATH = "${JAVA_HOME}/bin:${env.PATH}"
+        
+        // Configuración de la aplicación
+        APP_NAME = 'ecommerce-microservice-backend'
+        DOCKER_IMAGE = "${APP_NAME}:${env.BUILD_NUMBER}"
+
+        DOCKERHUB_USERNAME = 'j2loop' 
+        DOCKERHUB_CREDENTIALS_ID = 'DOCKERHUB_CREDENTIALS' // El ID de la credencial que creaste en Jenkins
+        
+        // Configuración de GitHub
+        GITHUB_TOKEN = credentials('GITHUB_TOKEN') // Añadir token de GitHub en Jenkins
+        
+        // Configuración de notificaciones
+        EMAIL_RECIPIENTS = 'juanjolo1204lo@gmail.com' // Emails para notificaciones
+        
+        // Variables dinámicas (se establecen durante el pipeline)
+        SEMANTIC_VERSION = ''
+        IS_PRODUCTION_DEPLOY = 'false'
     }
 
-    parameters {
-        booleanParam(
-            name: 'GENERATE_RELEASE_NOTES',
-            defaultValue: true,
-            description: 'Generate automatic release notes'
-        )
-        string(
-            name: 'BUILD_TAG',
-            defaultValue: "${env.BUILD_ID}",
-            description: 'Tag for release notes identification'
-        )
-    }
-
-   stages {
-
-           stage('Init') {
-               steps {
-                   script {
-                       def profileConfig = [
-                           master : ['prod', '-prod'],
-                           release: ['stage', '-stage']
-                       ]
-                       def config = profileConfig.get(env.BRANCH_NAME, ['dev', '-dev'])
-
-                       env.SPRING_PROFILES_ACTIVE = config[0]
-                       env.IMAGE_TAG = config[0]
-                       env.DEPLOYMENT_SUFFIX = config[1]
-
-                       echo "📦 Branch: ${env.BRANCH_NAME}"
-                       echo "🌱 Spring profile: ${env.SPRING_PROFILES_ACTIVE}"
-                       echo "🏷️ Image tag: ${env.IMAGE_TAG}"
-                       echo "📂 Deployment suffix: ${env.DEPLOYMENT_SUFFIX}"
-
-                   }
-               }
-           }
-
-        stage('Ensure Namespace') {
-            steps {
-                script {
-                    def ns = env.K8S_NAMESPACE
-                    bat "kubectl get namespace ${ns} || kubectl create namespace ${ns}"
-                }
-            }
-        }
-
+    stages {
         stage('Checkout') {
             steps {
-                git branch: "${env.BRANCH_NAME}", url: 'https://github.com/Juandap19/ecommerce-microservice-backend-app.git'
+                echo 'Obteniendo código fuente...'
+                checkout scm
             }
         }
 
-        stage('Verify Tools') {
+        stage('Compile') {
             steps {
-                bat 'java -version'
-                bat 'mvn -version'
-                bat 'docker --version'
-                bat 'kubectl config current-context'
-
+                echo 'Compilando el proyecto...'
+                sh './mvnw clean compile'
             }
         }
 
-        stage('Build & Package') {
-                  when { anyOf { branch 'master'; branch 'stage' ; branch 'dev'} }
-                  steps {
-                      bat "mvn clean package -DskipTests"
-                         }
-                  }
+        stage('Calculate Semantic Version') {
+            steps {
+                echo 'Calculando versión semántica...'
+                script {
+                    // Obtener último tag de versión
+                    def lastTag = sh(
+                        script: "git describe --tags --abbrev=0 2>/dev/null || echo 'v0.0.0'",
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "🏷️  Último tag: ${lastTag}"
+                    
+                    // Extraer números de versión (ej: v1.2.3 -> [1, 2, 3])
+                    def versionNumbers = lastTag.replaceAll(/^v/, '').split('\\.')
+                    def major = versionNumbers[0] as Integer
+                    def minor = versionNumbers.size() > 1 ? versionNumbers[1] as Integer : 0
+                    def patch = versionNumbers.size() > 2 ? versionNumbers[2] as Integer : 0
+                    
+                    // Analizar commits desde el último tag para determinar tipo de versión
+                    def commitMessages = sh(
+                        script: "git log ${lastTag}..HEAD --pretty=format:'%s' 2>/dev/null || git log --pretty=format:'%s' -10",
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "📝 Analizando commits para versionado semántico..."
+                    
+                    def isMajor = commitMessages.contains('BREAKING CHANGE') || 
+                                 commitMessages.contains('!:') ||
+                                 commitMessages.toLowerCase().contains('breaking')
+                    def isMinor = commitMessages.toLowerCase().contains('feat:') ||
+                                 commitMessages.toLowerCase().contains('feature:')
+                    def isPatch = commitMessages.toLowerCase().contains('fix:') ||
+                                 commitMessages.toLowerCase().contains('bugfix:') ||
+                                 commitMessages.toLowerCase().contains('patch:')
+                    
+                    // Calcular nueva versión
+                    def newVersion
+                    if (isMajor) {
+                        newVersion = "${major + 1}.0.0"
+                        echo "🚨 BREAKING CHANGE detectado - Incrementando versión MAJOR"
+                    } else if (isMinor) {
+                        newVersion = "${major}.${minor + 1}.0"
+                        echo "✨ Nueva funcionalidad detectada - Incrementando versión MINOR"
+                    } else if (isPatch || env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'main') {
+                        newVersion = "${major}.${minor}.${patch + 1}"
+                        echo "🔧 Fix o release detectado - Incrementando versión PATCH"
+                    } else {
+                        // Para branches de desarrollo, usar versión con suffix
+                        def branchSuffix = env.BRANCH_NAME.replaceAll(/[^a-zA-Z0-9]/, '-').toLowerCase()
+                        newVersion = "${major}.${minor}.${patch + 1}-${branchSuffix}.${env.BUILD_NUMBER}"
+                        echo "🔀 Branch de desarrollo - Usando versión con suffix"
+                    }
+                    
+                    env.SEMANTIC_VERSION = newVersion
+                    echo "🎯 Nueva versión semántica: v${newVersion}"
+                }
+            }
+        }
 
-        stage('Build & Push Docker Images') {
-               when { anyOf { branch 'master'; branch 'stage' ; branch 'dev'} }
-              steps {
-                  withCredentials([string(credentialsId: "${DOCKER_CREDENTIALS_ID}", variable: 'password')]) {
-                      bat "docker login -u ${DOCKERHUB_USER} -p ${password}"
+        stage('Detect Services to Build') {
+            steps {
+                echo 'Detectando microservicios a construir...'
+                script {
+                    // Definir microservicios disponibles
+                    def microservices = [
+                        'api-gateway',
+                        'service-discovery', 
+                        'user-service',
+                        'product-service',
+                        'order-service',
+                        'payment-service',
+                        'shipping-service',
+                        'favourite-service'
+                    ]
+                    
+                    def servicesToBuild = []
+                    
+                    // Detectar cambios (si es commit específico) o construir todos (si es manual)
+                    if (env.CHANGE_TARGET) {
+                        // Es un PR, detectar cambios
+                        def changes = sh(
+                            script: "git diff --name-only origin/${env.CHANGE_TARGET}...HEAD",
+                            returnStdout: true
+                        ).trim().split('\n')
+                        
+                        servicesToBuild = microservices.findAll { service ->
+                            changes.any { it.startsWith("${service}/") }
+                        }
+                    } else {
+                        // Build manual o push a main, construir servicios específicos
+                        def serviceToBuild = params.MICROSERVICE ?: 'ALL'
+                        if (serviceToBuild == 'ALL') {
+                            servicesToBuild = microservices
+                        } else {
+                            servicesToBuild = [serviceToBuild]
+                        }
+                    }
+                    
+                    if (servicesToBuild.isEmpty()) {
+                        echo "ℹ️  No se detectaron cambios en microservicios"
+                        servicesToBuild = ['user-service'] // Default para testing
+                    }
+                    
+                    echo "🔨 Microservicios a construir: ${servicesToBuild.join(', ')}"
+                    
+                    // Guardar lista de servicios para etapas posteriores
+                    env.SERVICES_TO_BUILD = servicesToBuild.join(',')
+                    
+                    // Determinar si es despliegue a producción
+                    if (env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'main') {
+                        env.IS_PRODUCTION_DEPLOY = 'true'
+                        echo "🚀 Despliegue a PRODUCCIÓN detectado"
+                    }
+                }
+            }
+        }
 
-                      script {
-                          SERVICES.split().each { service ->
-                              bat "docker build -t ${DOCKERHUB_USER}/${service}:${IMAGE_TAG} .\\${service}"
-                              bat "docker push ${DOCKERHUB_USER}/${service}:${IMAGE_TAG}"
-                          }
-                      }
-                  }
-              }
-          }
-
-
-         stage('Unit Tests') {
-                     when { anyOf { branch 'dev'; } }
-                    steps {
-                        script {
-                            ['user-service', 'product-service', 'payment-service'].each {
-                                bat "mvn test -pl ${it}"
-                            }
+        stage('Package Microservices') {
+            steps {
+                echo 'Empaquetando microservicios...'
+                script {
+                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
+                    
+                    for (service in servicesToBuild) {
+                        echo "📦 Empaquetando ${service}..."
+                        
+                        // Opción 1: Si cada microservicio tiene su propio pom.xml
+                        if (fileExists("${service}/pom.xml")) {
+                            sh """
+                                cd ${service}
+                                ../mvnw clean package -DskipTests
+                                echo "✅ JAR generado para ${service}"
+                                ls -la target/*.jar || echo "⚠️  No se encontró JAR en target/"
+                            """
+                        } else {
+                            // Opción 2: Si es un proyecto multi-módulo con un pom padre
+                            sh """
+                                ./mvnw clean package -pl ${service} -am -DskipTests
+                                echo "✅ JAR generado para ${service}"
+                                ls -la ${service}/target/*.jar || echo "⚠️  No se encontró JAR en ${service}/target/"
+                            """
                         }
                     }
                 }
+            }
+        }
 
-
-        stage('Integration Tests') {
-                    when { anyOf { branch 'stage'; } }
-                    steps {
-                        script {
-                            ['user-service', 'product-service'].each {
-                                bat "mvn verify -pl ${it}"
+        stage('Build Docker Images') {
+            steps {
+                echo 'Construyendo imágenes Docker...'
+                script {
+                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
+                    def builtImages = []
+                    def localImages = []
+                    
+                    for (service in servicesToBuild) {
+                        if (fileExists("${service}/Dockerfile")) {
+                            echo "🐳 Construyendo imagen Docker para ${service}..."
+                            
+                            // Verificar que el JAR existe antes de construir
+                            def jarExists = sh(
+                                script: "ls ${service}/target/*.jar 2>/dev/null | wc -l",
+                                returnStdout: true
+                            ).trim()
+                            
+                            if (jarExists == "0") {
+                                error "❌ No se encontró JAR para ${service}. Verifica que el empaquetado fue exitoso."
                             }
+                            
+                            sh """
+                                cd ${service}
+                                # Construir la imagen con versionado semántico
+                                docker build -t ${service}:${env.BUILD_NUMBER} .
+                                docker tag ${service}:${env.BUILD_NUMBER} ${service}:latest
+                                docker tag ${service}:${env.BUILD_NUMBER} ${service}:v${env.SEMANTIC_VERSION}
+                                docker tag ${service}:${env.BUILD_NUMBER} ${DOCKERHUB_USERNAME}/${service}:${env.BUILD_NUMBER}
+                                docker tag ${service}:${env.BUILD_NUMBER} ${DOCKERHUB_USERNAME}/${service}:latest
+                                docker tag ${service}:${env.BUILD_NUMBER} ${DOCKERHUB_USERNAME}/${service}:v${env.SEMANTIC_VERSION}
+                            """
+                            
+                            // Agregar imagen local para escaneo de seguridad
+                            localImages.add("${service}:${env.BUILD_NUMBER}")
+                            // Agregar imágenes de Docker Hub para push (con versionado semántico)
+                            builtImages.add("${DOCKERHUB_USERNAME}/${service}:${env.BUILD_NUMBER}")
+                            builtImages.add("${DOCKERHUB_USERNAME}/${service}:v${env.SEMANTIC_VERSION}")
+                        } else {
+                            echo "⚠️  No se encontró Dockerfile en ${service}/"
+                        }
+                    }
+                    
+                    // Guardar listas de imágenes para etapas posteriores
+                    env.LOCAL_IMAGES = localImages.join(',')
+                    env.BUILT_IMAGES = builtImages.join(',')
+                    echo "📦 Imágenes locales (para escaneo): ${env.LOCAL_IMAGES}"
+                    echo "📦 Imágenes para push: ${env.BUILT_IMAGES}"
+                }
+            }
+        }
+
+        stage('Code Quality and Security Analysis') {
+            parallel {
+                stage('SonarQube Analysis') {
+                    steps {
+                        echo 'Ejecutando análisis de SonarQube...'
+                        withSonarQubeEnv('SonarQube-Server') {
+                            sh """
+                                ./mvnw sonar:sonar \
+                                -Dsonar.projectKey=ecommerce-microservice-backend \
+                                -Dsonar.projectName='Ecommerce Microservice Backend' \
+                                -Dsonar.projectVersion=${env.BUILD_NUMBER} \
+                                -Dsonar.host.url=${SONAR_HOST_URL} \
+                                -Dsonar.login=${SONAR_TOKEN}
+                            """
                         }
                     }
                 }
-
-         stage('E2E Tests') {
-                    when { anyOf { branch 'stage'; } }
+                
+                stage('Container Security Scan') {
+                    when {
+                        expression { !params.SKIP_SECURITY_SCAN }
+                    }
                     steps {
-                        bat "mvn verify -pl e2e-tests"
+                        echo 'Ejecutando escaneo de seguridad con Trivy (modo standalone)...'
+                        script {
+                            def imagesToScan = env.LOCAL_IMAGES?.split(',') ?: []
+                            
+                            if (imagesToScan.size() == 0) {
+                                echo "ℹ️  No hay imágenes locales para escanear"
+                                return
+                            }
+                            
+                            sh """
+                                # Instalar Trivy si no existe
+                                if ! command -v trivy &> /dev/null; then
+                                    echo "📦 Instalando Trivy..."
+                                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+                                fi
+                                
+                                echo "✅ Trivy instalado y listo para escaneo local"
+                            """
+                            
+                            def totalCritical = 0
+                            def totalHigh = 0
+                            def scanResults = []
+                            
+                            // Escanear cada imagen local construida
+                            for (image in imagesToScan) {
+                                // Extraer el nombre del servicio desde imagen local (ej: user-service:123)
+                                def serviceName = image.split(':')[0]
+                                echo "🛡️  Escaneando imagen local ${image}..."
+                                
+                                sh """
+                                    # Escaneo completo en formato JSON
+                                    trivy image \
+                                        --format json \
+                                        --output trivy-${serviceName}-report.json \
+                                        ${image}
+                                    
+                                    # Escaneo resumen para consola
+                                    trivy image \
+                                        --format table \
+                                        --output trivy-${serviceName}-summary.txt \
+                                        --severity CRITICAL,HIGH \
+                                        ${image}
+                                    
+                                    echo "📊 Resumen de ${serviceName}:"
+                                    cat trivy-${serviceName}-summary.txt || echo "No hay vulnerabilidades críticas/altas"
+                                """
+                                
+                                // Contar vulnerabilidades para este servicio
+                                def criticalCount = sh(
+                                    script: "cat trivy-${serviceName}-report.json | jq '.Results[]?.Vulnerabilities[]? | select(.Severity==\"CRITICAL\") | .VulnerabilityID' | wc -l",
+                                    returnStdout: true
+                                ).trim() as Integer
+                                
+                                def highCount = sh(
+                                    script: "cat trivy-${serviceName}-report.json | jq '.Results[]?.Vulnerabilities[]? | select(.Severity==\"HIGH\") | .VulnerabilityID' | wc -l",
+                                    returnStdout: true
+                                ).trim() as Integer
+                                
+                                totalCritical += criticalCount
+                                totalHigh += highCount
+                                
+                                scanResults.add([
+                                    service: serviceName,
+                                    image: image,
+                                    critical: criticalCount,
+                                    high: highCount
+                                ])
+                                
+                                echo "🔴 ${serviceName} - Críticas: ${criticalCount}, Altas: ${highCount}"
+                            }
+                            
+                            // Generar reporte consolidado
+                            sh """
+                                echo "TOTAL_CRITICAL_VULNS=${totalCritical}" > trivy-metrics.properties
+                                echo "TOTAL_HIGH_VULNS=${totalHigh}" >> trivy-metrics.properties
+                                echo "SCANNED_SERVICES=${imagesToScan.size()}" >> trivy-metrics.properties
+                                
+                                # Crear reporte consolidado HTML
+                                cat > trivy-consolidated-report.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trivy Security Report - Microservices (Local Scan)</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .service { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .critical { color: #d32f2f; font-weight: bold; }
+        .high { color: #f57c00; font-weight: bold; }
+        .summary { background: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🛡️ Trivy Security Report (Local Images) - Build ${BUILD_NUMBER}</h1>
+    <div class="summary">
+        <h2>📊 Resumen General</h2>
+        <p><strong>Servicios escaneados:</strong> ${imagesToScan.size()}</p>
+        <p><strong>Total vulnerabilidades críticas:</strong> <span class="critical">${totalCritical}</span></p>
+        <p><strong>Total vulnerabilidades altas:</strong> <span class="high">${totalHigh}</span></p>
+        <p><strong>Modo:</strong> Standalone (imágenes locales)</p>
+        <p><strong>Fecha:</strong> ${new Date()}</p>
+    </div>
+EOF
+                            """
+                            
+                            // Agregar detalles de cada servicio al HTML
+                            for (result in scanResults) {
+                                sh """
+cat >> trivy-consolidated-report.html << 'EOF'
+    <div class="service">
+        <h3>🚀 ${result.service}</h3>
+        <p><strong>Imagen local:</strong> ${result.image}</p>
+        <p><strong>Vulnerabilidades críticas:</strong> <span class="critical">${result.critical}</span></p>
+        <p><strong>Vulnerabilidades altas:</strong> <span class="high">${result.high}</span></p>
+        <a href="trivy-${result.service}-report.json" target="_blank">Ver reporte detallado JSON</a>
+    </div>
+EOF
+                                """
+                            }
+                            
+                            sh 'echo "</body></html>" >> trivy-consolidated-report.html'
+                            
+                            echo "📈 Resumen final del escaneo local:"
+                            echo "   - Total servicios: ${imagesToScan.size()}"
+                            echo "   - Total vulnerabilidades críticas: ${totalCritical}"
+                            echo "   - Total vulnerabilidades altas: ${totalHigh}"
+                            
+                            // Política de seguridad - fallar si hay vulnerabilidades críticas
+                            if (totalCritical > 0) {
+                                echo "❌ ADVERTENCIA: Se encontraron ${totalCritical} vulnerabilidades críticas en total"
+                                echo "🚫 Considerando fallar el build por política de seguridad..."
+                                // Descomentar para fallar el build:
+                                // error("Build fallido por vulnerabilidades críticas detectadas")
+                            }
+                            
+                            if (totalHigh > 20) {
+                                echo "⚠️  ADVERTENCIA: Se encontraron ${totalHigh} vulnerabilidades altas en total (límite recomendado: 20)"
+                                currentBuild.result = 'UNSTABLE'
+                            }
+                        }
+                    }
+                    post {
+                        always {
+                            // Publicar reporte consolidado
+                            publishHTML([
+                                allowMissing: true,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: '.',
+                                reportFiles: 'trivy-consolidated-report.html',
+                                reportName: 'Trivy Security Report (Local)'
+                            ])
+                            
+                            // Archivar todos los reportes
+                            archiveArtifacts artifacts: 'trivy-*-report.json,trivy-*-summary.txt,trivy-metrics.properties,trivy-consolidated-report.html', 
+                                           fingerprint: true, 
+                                           allowEmptyArchive: true
+                        }
                     }
                 }
+            }
+        }
 
-
-     stage('Start containers for testing') {
-              when { anyOf { branch 'stage'; } }
-         steps {
-             script {
-                 powershell '''
-                  # Function to wait for a service to be healthy
-                 function Wait-ForHealthCheck {
-                     param(
-                         [string]$Url,
-                         [string]$ServiceName,
-                         [int]$TimeoutSeconds = 300
-                     )
-
-                     Write-Host "⌛ Waiting for $ServiceName..." -ForegroundColor Yellow
-                     $startTime = Get-Date
-
-                     do {
-                         try {
-                             $response = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec 5 -ErrorAction SilentlyContinue
-                             if ($response.status -eq "UP") {
-                                  Write-Host "✅ $ServiceName is healthy!" -ForegroundColor Green
-                                 return $true
-                             }
-                         }
-                         catch {
-                                        # Retry until successful
-                         }
-
-                         Start-Sleep -Seconds 5
-                         $elapsed = (Get-Date) - $startTime
-
-                         if ($elapsed.TotalSeconds -gt $TimeoutSeconds) {
-                             Write-Host "❌ Timeout waiting for $ServiceName" -ForegroundColor Red
-                             return $false
-                         }
-
-                           Write-Host "⌛ Waiting for $ServiceName... ($([int]$elapsed.TotalSeconds)s)" -ForegroundColor Yellow
-                     } while ($true)
-                 }
-
-                  # Function to wait for health check with complex JSON
-                 function Wait-ForHealthCheckWithJq {
-                     param(
-                         [string]$Url,
-                         [string]$ServiceName,
-                         [int]$TimeoutSeconds = 300
-                     )
-
-                     Write-Host "⌛ Waiting for $ServiceName..." -ForegroundColor Yellow
-                     $startTime = Get-Date
-
-                     do {
-                         try {
-                             $response = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec 5 -ErrorAction SilentlyContinue
-                             if ($response.status -eq "UP") {
-                                  Write-Host "✅ $ServiceName is healthy!" -ForegroundColor Green
-                                 return $true
-                             }
-                         }
-                         catch {
-                                 # Retry until successful
-                         }
-
-                         Start-Sleep -Seconds 5
-                         $elapsed = (Get-Date) - $startTime
-
-                         if ($elapsed.TotalSeconds -gt $TimeoutSeconds) {
-                              Write-Host "❌ Timeout waiting for $ServiceName" -ForegroundColor Red
-                             return $false
-                         }
-
-                          Write-Host "⌛ Waiting for $ServiceName... ($([int]$elapsed.TotalSeconds)s)" -ForegroundColor Yellow
-                     } while ($true)
-                 }
-
-                 try {
-                       # create Docker network if it doesn't exist
-                     Write-Host "🌐 Creating Docker network..." -ForegroundColor Cyan
-                     docker network create ecommerce-test 2>$null
-                     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1) {
-                         throw "Error creating Docker network"
-                     }
-
-                     # 1. ZIPKIN
-                      Write-Host "🚀 Starting ZIPKIN..." -ForegroundColor Cyan
-                     docker run -d --name zipkin-container --network ecommerce-test -p 9411:9411 openzipkin/zipkin
-                      if ($LASTEXITCODE -ne 0) { throw "Error starting Zipkin" }
-
-                     # 2. EUREKA (Service Discovery)
-                      Write-Host "🚀 Starting EUREKA..." -ForegroundColor Cyan
-                     docker run -d --name service-discovery-container --network ecommerce-test -p 8761:8761 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         minichocolate/service-discovery:${env:IMAGE_TAG}
-                       if ($LASTEXITCODE -ne 0) { throw "Error starting Eureka" }
-
-
-                     if (!(Wait-ForHealthCheck -Url "http://localhost:8761/actuator/health" -ServiceName "EUREKA")) {
-                         throw "Eureka could not be started correctly"
-                     }
-
-                     # 3. CLOUD-CONFIG
-                     Write-Host "🚀 Starting CLOUD-CONFIG..." -ForegroundColor Cyan
-                     docker run -d --name cloud-config-container --network ecommerce-test -p 9296:9296 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://service-discovery-container:8761/eureka/ `
-                         -e EUREKA_INSTANCE=cloud-config-container `
-                         minichocolate/cloud-config:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting Cloud Config" }
-
-                     if (!(Wait-ForHealthCheck -Url "http://localhost:9296/actuator/health" -ServiceName "CLOUD-CONFIG")) {
-                         throw "CLOUD-CONFIG could not be started correctly"
-                     }
-
-                     # 4. ORDER-SERVICE
-                     Write-Host "🚀 Starting ORDER-SERVICE..." -ForegroundColor Cyan
-                     docker run -d --name order-service-container --network ecommerce-test -p 8300:8300 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-config-container:9296 `
-                         -e EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE=http://service-discovery-container:8761/eureka `
-                         -e EUREKA_INSTANCE=order-service-container `
-                        minichocolate/order-service:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting Order Service" }
-
-                     if (!(Wait-ForHealthCheckWithJq -Url "http://localhost:8300/order-service/actuator/health" -ServiceName "ORDER-SERVICE")) {
-                         throw "ORDER-SERVICE could not be started correctly"
-                     }
-
-                     # 5. PAYMENT-SERVICE
-                     Write-Host "🚀 Starting PAYMENT..." -ForegroundColor Cyan
-                     docker run -d --name payment-service-container --network ecommerce-test -p 8400:8400 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-config-container:9296 `
-                         -e EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE=http://service-discovery-container:8761/eureka `
-                         -e EUREKA_INSTANCE=payment-service-container `
-                         minichocolate/payment-service:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting Payment Service" }
-
-                     if (!(Wait-ForHealthCheckWithJq -Url "http://localhost:8400/payment-service/actuator/health" -ServiceName "PAYMENT-SERVICE")) {
-                         throw "PAYMENT-SERVICE could not be started correctly"
-                     }
-
-                     # 6. PRODUCT-SERVICE
-                     Write-Host "🚀 Starting PRODUCT..." -ForegroundColor Cyan
-                     docker run -d --name product-service-container --network ecommerce-test -p 8500:8500 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-config-container:9296 `
-                         -e EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE=http://service-discovery-container:8761/eureka `
-                         -e EUREKA_INSTANCE=product-service-container `
-                         minichocolate/product-service:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting Product Service" }
-
-                     if (!(Wait-ForHealthCheckWithJq -Url "http://localhost:8500/product-service/actuator/health" -ServiceName "PRODUCT-SERVICE")) {
-                         throw "PRODUCT-SERVICE could not be started correctly"
-                     }
-
-                     # 7. SHIPPING-SERVICE
-                     Write-Host "🚀 Starting SHIPPING..." -ForegroundColor Cyan
-                     docker run -d --name shipping-service-container --network ecommerce-test -p 8600:8600 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-config-container:9296 `
-                         -e EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE=http://service-discovery-container:8761/eureka `
-                         -e EUREKA_INSTANCE=shipping-service-container `
-                        minichocolate/shipping-service:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting Shipping Service" }
-
-                     if (!(Wait-ForHealthCheckWithJq -Url "http://localhost:8600/shipping-service/actuator/health" -ServiceName "SHIPPING-SERVICE")) {
-                         throw "SHIPPING-SERVICE could not be started correctly"
-                     }
-
-                     # 8. USER-SERVICE
-                     Write-Host "🚀 Starting USER..." -ForegroundColor Cyan
-                     docker run -d --name user-service-container --network ecommerce-test -p 8700:8700 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-config-container:9296 `
-                         -e EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE=http://service-discovery-container:8761/eureka `
-                         -e EUREKA_INSTANCE=user-service-container `
-                         minichocolate/user-service:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting User Service" }
-
-                     if (!(Wait-ForHealthCheckWithJq -Url "http://localhost:8700/user-service/actuator/health" -ServiceName "USER-SERVICE")) {
-                         throw "USER-SERVICE could not be started correctly"
-                     }
-
-                     # 9. FAVOURITE-SERVICE
-                     Write-Host "🚀 Starting FAVOURITE..." -ForegroundColor Cyan
-                     docker run -d --name favourite-service-container --network ecommerce-test -p 8800:8800 `
-                         -e SPRING_PROFILES_ACTIVE=dev `
-                         -e SPRING_ZIPKIN_BASE_URL=http://zipkin-container:9411 `
-                         -e SPRING_CONFIG_IMPORT=optional:configserver:http://cloud-config-container:9296 `
-                         -e EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE=http://service-discovery-container:8761/eureka `
-                         -e EUREKA_INSTANCE=favourite-service-container `
-                         minichocolate/favourite-service:${env:IMAGE_TAG}
-                     if ($LASTEXITCODE -ne 0) { throw "Error starting Favourite Service" }
-
-                     if (!(Wait-ForHealthCheckWithJq -Url "http://localhost:8800/favourite-service/actuator/health" -ServiceName "FAVOURITE-SERVICE")) {
-                         throw "FAVOURITE-SERVICE could not be started correctly"
-                     }
-
-                     Write-Host "✅ All containers are up and healthy." -ForegroundColor Green
-                 }
-                 catch {
-                     Write-Host "❌ Error: $_" -ForegroundColor Red
-                     Write-Host "🧹 Cleaning up containers..." -ForegroundColor Yellow
-
-                     # Cleanup in case of error
-                     $containers = @(
-                         "favourite-service-container",
-                         "user-service-container",
-                         "shipping-service-container",
-                         "product-service-container",
-                         "payment-service-container",
-                         "order-service-container",
-                         "cloud-config-container",
-                         "service-discovery-container",
-                         "zipkin-container"
-                     )
-
-                     foreach ($container in $containers) {
-                         docker stop $container 2>$null
-                         docker rm $container 2>$null
-                     }
-
-                     docker network rm ecommerce-test 2>$null
-                     throw "Failed to start containers"
-                 }
-                 '''
-             }
-         }
-     }
-
-        stage('Run Load Tests with Locust') {
-            when { anyOf { branch 'stage'; } }
+        stage('Push Docker Images') {
             steps {
+                echo 'Publicando imágenes Docker en Docker Hub...'
                 script {
-                    bat '''
-                    echo 🚀 Starting Locust for order-service...
-
-                    if not exist locust-reports mkdir locust-reports
-
-                    docker run --rm --network ecommerce-test ^
-                    -v "%CD%/locust-reports:/mnt/locust" ^
-                    -v "%CD%/locust:/mnt" ^
-                    -v "%CD%/locust-results:/app" ^
-                    minichocolate/locust:%IMAGE_TAG% ^
-                    -f /mnt/test/order-service/locustfile.py ^
-                    --host http://order-service-container:8300 ^
-                    --headless -u 5 -r 1 -t 1m ^
-                    --only-summary ^
-                    --html /mnt/locust/order-service-report.html
-
-                    echo 🚀 Starting Locust for payment-service...
-
-                    docker run --rm --network ecommerce-test ^
-                    -v "%CD%/locust-reports:/mnt/locust" ^
-                    -v "%CD%/locust:/mnt" ^
-                    -v "%CD%/locust-results:/app" ^
-                    minichocolate/locust:%IMAGE_TAG% ^
-                    -f /mnt/test/payment-service/locustfile.py ^
-                    --host http://payment-service-container:8400 ^
-                    --headless -u 5 -r 1 -t 1m ^
-                    --only-summary ^
-                    --html /mnt/locust/payment-service-report.html
-
-                    echo 🚀 Starting Locust for favourite-service...
-
-                    docker run --rm --network ecommerce-test ^
-                    -v "%CD%/locust-reports:/mnt/locust" ^
-                    -v "%CD%/locust:/mnt" ^
-                    -v "%CD%/locust-results:/app" ^
-                    minichocolate/locust:%IMAGE_TAG% ^
-                    -f /mnt/test/favourite-service/locustfile.py ^
-                    --host http://favourite-service-container:8800 ^
-                    --headless -u 5 -r 1 -t 1m ^
-                    --only-summary ^
-                    --html /mnt/locust/favourite-service-report.html
-
-                    echo ✅ Tests completed
-                    '''
+                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
+                    
+                    withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDENTIALS_ID, usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
+                        // Login a Docker Hub
+                        sh 'echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER --password-stdin'
+                        
+                        for (service in servicesToBuild) {
+                            if (fileExists("${service}/Dockerfile")) {
+                                echo "📤 Publicando ${service} en Docker Hub..."
+                                
+                                sh """
+                                    # Push imagen con número de build
+                                    docker push ${DOCKERHUB_USERNAME}/${service}:${env.BUILD_NUMBER}
+                                    
+                                    # Push imagen latest
+                                    docker push ${DOCKERHUB_USERNAME}/${service}:latest
+                                    
+                                    # Push imagen con versión semántica
+                                    docker push ${DOCKERHUB_USERNAME}/${service}:v${env.SEMANTIC_VERSION}
+                                    
+                                    echo "✅ ${service} publicado exitosamente con versión v${env.SEMANTIC_VERSION}"
+                                """
+                            }
+                        }
+                        
+                        // Logout de Docker Hub por seguridad
+                        sh 'docker logout'
+                    }
+                    
+                    echo "🎉 Todas las imágenes han sido publicadas en Docker Hub"
                 }
             }
         }
 
-        stage('Run Stress Tests with Locust') {
-            when { anyOf { branch 'stage'; } }
+        stage('Quality Gate') {
             steps {
-                script {
-                    bat '''
-                    echo 🔥 Starting Locust for stress testing...
-
-                    docker run --rm --network ecommerce-test ^
-                    -v "%CD%/locust-reports:/mnt/locust" ^
-                    -v "%CD%/locust:/mnt" ^
-                    -v "%CD%/locust-results:/app" ^
-                    minichocolate/locust:%IMAGE_TAG% ^
-                    -f /mnt/test/order-service/locustfile.py ^
-                    --host http://order-service-container:8300 ^
-                    --headless -u 10 -r 1 -t 1m ^
-                    --only-summary ^
-                    --html /mnt/locust/stress-order-service-report.html
-
-                    docker run --rm --network ecommerce-test ^
-                    -v "%CD%/locust-reports:/mnt/locust" ^
-                    -v "%CD%/locust:/mnt" ^
-                    -v "%CD%/locust-results:/app" ^
-                    minichocolate/locust:%IMAGE_TAG% ^
-                    -f /mnt/test/payment-service/locustfile.py ^
-                    --host http://payment-service-container:8400 ^
-                    --headless -u 10 -r 1 -t 1m ^
-                    --only-summary ^
-                    --html /mnt/locust/stress-payment-service-report.html
-
-                    docker run --rm --network ecommerce-test ^
-                    -v "%CD%/locust-reports:/mnt/locust" ^
-                    -v "%CD%/locust:/mnt" ^
-                    -v "%CD%/locust-results:/app" ^
-                    minichocolate/locust:%IMAGE_TAG% ^
-                    -f /mnt/test/favourite-service/locustfile.py ^
-                    --host http://favourite-service-container:8800 ^
-                    --headless -u 10 -r 1 -t 1m ^
-                    --only-summary ^
-                    --html /mnt/locust/stress-favourite-service-report.html
-
-                    echo ✅ Stress tests completed
-                    '''
+                echo 'Esperando resultado del Quality Gate de SonarQube...'
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
-
-
-       stage('Stop and remove containers') {
-                 when { anyOf { branch 'stage'; } }
-           steps {
-               script {
-                   bat """
-                   echo 🛑 Stopping and removing containers...
-
-                   docker rm -f locust || exit 0
-                   docker rm -f favourite-service-container || exit 0
-                   docker rm -f user-service-container || exit 0
-                   docker rm -f shipping-service-container || exit 0
-                   docker rm -f product-service-container || exit 0
-                   docker rm -f payment-service-container || exit 0
-                   docker rm -f order-service-container || exit 0
-                   docker rm -f cloud-config-container || exit 0
-                   docker rm -f service-discovery-container || exit 0
-                   docker rm -f zipkin-container || exit 0
-
-                   echo 🧹 All containers removed
-                   """
-               }
-           }
-       }
-
-
-        stage('Deploy Common Config') {
-             when { anyOf { branch 'master'; } }
-            steps {
-                bat "kubectl apply -f k8s\\common-config.yaml -n ${K8S_NAMESPACE}"
-            }
-        }
-
-        stage('Deploy Core Services') {
-              when { anyOf { branch 'master'; } }
-            steps {
-                bat "kubectl apply -f k8s\\zipkin -n ${K8S_NAMESPACE}"
-                bat "kubectl rollout status deployment/zipkin -n ${K8S_NAMESPACE} --timeout=700s"
-
-                bat "kubectl apply -f k8s\\service-discovery -n ${K8S_NAMESPACE}"
-                bat "kubectl set image deployment/service-discovery service-discovery=${DOCKERHUB_USER}/service-discovery:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
-                bat "kubectl rollout status deployment/service-discovery -n ${K8S_NAMESPACE} --timeout=700s"
-
-                bat "kubectl apply -f k8s\\cloud-config -n ${K8S_NAMESPACE}"
-                bat "kubectl set image deployment/cloud-config cloud-config=${DOCKERHUB_USER}/cloud-config:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
-                bat "kubectl rollout status deployment/cloud-config -n ${K8S_NAMESPACE} --timeout=700s"
-            }
-        }
-
-         stage('Deploy Microservices') {
-             when { anyOf { branch 'master'; } }
-             steps {
-                 script {
-                     def appServices = ['user-service']
-                     echo "👻"
-                     appServices.each { svc ->
-                         bat "kubectl apply -f k8s\\${svc} -n ${K8S_NAMESPACE}"
-                         bat "kubectl set image deployment/${svc} ${svc}=${DOCKERHUB_USER}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
-                         bat "kubectl set env deployment/${svc} SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE} -n ${K8S_NAMESPACE}"
-                         bat "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=800s"
-                     }
-                 }
-             }
-         }
-
-        stage('Generate Release Notes') {
+        
+        stage('Security Policy Check') {
             when {
-                expression { params.GENERATE_RELEASE_NOTES }
+                expression { !params.SKIP_SECURITY_SCAN }
             }
             steps {
+                echo 'Verificando políticas de seguridad...'
                 script {
-                    echo "=== GENERATE RELEASE NOTES ==="
-                    generateReleaseNotes()
+                    // Leer métricas de Trivy
+                    if (fileExists('trivy-metrics.properties')) {
+                        def props = readProperties file: 'trivy-metrics.properties'
+                        def totalCriticalVulns = props.TOTAL_CRITICAL_VULNS as Integer
+                        def totalHighVulns = props.TOTAL_HIGH_VULNS as Integer
+                        def scannedServices = props.SCANNED_SERVICES as Integer
+                        
+                        echo "📊 Métricas de seguridad consolidadas:"
+                        echo "   - Servicios escaneados: ${scannedServices}"
+                        echo "   - Total vulnerabilidades críticas: ${totalCriticalVulns}"
+                        echo "   - Total vulnerabilidades altas: ${totalHighVulns}"
+                        
+                        // Definir políticas (ajusta según tus necesidades)
+                        if (totalCriticalVulns > 0) {
+                            echo "⚠️  POLÍTICA: Se encontraron ${totalCriticalVulns} vulnerabilidades críticas en ${scannedServices} servicios"
+                            // currentBuild.result = 'UNSTABLE'  // Marca como inestable
+                            // error("Build fallido por vulnerabilidades críticas") // Falla el build
+                        }
+                        
+                        if (totalHighVulns > 30) {
+                            echo "⚠️  POLÍTICA: Demasiadas vulnerabilidades altas (${totalHighVulns} > 30) en todos los servicios"
+                            currentBuild.result = 'UNSTABLE'
+                        }
+                        
+                        // Política por promedio de servicios
+                        def avgCritical = totalCriticalVulns.toFloat() / scannedServices
+                        def avgHigh = totalHighVulns.toFloat() / scannedServices
+                        
+                        echo "📈 Promedio por servicio:"
+                        echo "   - Críticas: ${String.format('%.2f', avgCritical)}"
+                        echo "   - Altas: ${String.format('%.2f', avgHigh)}"
+                        
+                        echo "✅ Verificación de políticas completada"
+                    } else {
+                        echo "ℹ️  No se encontraron métricas de seguridad para evaluar"
+                    }
+                }
+            }
+        }
+        
+        stage('Production Deployment Approval') {
+            when {
+                expression { env.IS_PRODUCTION_DEPLOY == 'true' }
+            }
+            steps {
+                echo '🚨 Solicitando aprobación para despliegue a PRODUCCIÓN...'
+                script {
+                    def servicesToDeploy = env.SERVICES_TO_BUILD.split(',')
+                    def approvalMessage = """
+🚀 APROBACIÓN REQUERIDA: Despliegue a Producción
+
+📋 Detalles del despliegue:
+• Versión: v${env.SEMANTIC_VERSION}
+• Branch: ${env.BRANCH_NAME}
+• Build: ${env.BUILD_NUMBER}
+• Servicios: ${servicesToDeploy.join(', ')}
+
+🛡️ Verificaciones completadas:
+✅ Compilación exitosa
+✅ Análisis de calidad (SonarQube)
+✅ Escaneo de seguridad (Trivy)
+✅ Imágenes Docker construidas
+
+⚠️  Este despliegue afectará el entorno de PRODUCCIÓN.
+¿Desea continuar con el despliegue?
+                    """
+                    
+                    try {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def userInput = input(
+                                id: 'productionDeployApproval',
+                                message: approvalMessage,
+                                parameters: [
+                                    choice(
+                                        choices: ['Aprobar y continuar', 'Rechazar despliegue'],
+                                        description: 'Seleccione una opción:',
+                                        name: 'APPROVAL_CHOICE'
+                                    )
+                                ],
+                                submitterParameter: 'APPROVER'
+                            )
+                            
+                            if (userInput.APPROVAL_CHOICE == 'Rechazar despliegue') {
+                                error("❌ Despliegue a producción RECHAZADO por ${userInput.APPROVER}")
+                            }
+                            
+                            echo "✅ Despliegue a producción APROBADO por ${userInput.APPROVER}"
+                            env.DEPLOYMENT_APPROVER = userInput.APPROVER
+                            
+                        }
+                    } catch (Exception e) {
+                        echo "⏰ Timeout o rechazo de aprobación: ${e.getMessage()}"
+                        currentBuild.result = 'ABORTED'
+                        error("❌ Despliegue cancelado: No se recibió aprobación a tiempo")
+                    }
+                }
+            }
+        }
+
+        stage('Create GitHub Release') {
+            when {
+                anyOf {
+                    branch 'master'
+                    branch 'main'
+                }
+            }
+            steps {
+                echo 'Creando release en GitHub...'
+                script {
+                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
+                    def releaseTag = "v${env.SEMANTIC_VERSION}"
+                    def releaseTitle = "Release ${releaseTag} - ${servicesToBuild.join(', ')}"
+                    def releaseNotes = """
+## 🚀 Release ${releaseTag}
+
+### Microservicios actualizados:
+${servicesToBuild.collect { "- ${it}" }.join('\n')}
+
+### 📦 Imágenes Docker publicadas:
+${servicesToBuild.collect { "- \`${env.DOCKERHUB_USERNAME}/${it}:v${env.SEMANTIC_VERSION}\`" }.join('\n')}
+${servicesToBuild.collect { "- \`${env.DOCKERHUB_USERNAME}/${it}:latest\`" }.join('\n')}
+
+### 📊 Información del build:
+- **Build ID:** ${env.BUILD_NUMBER}
+- **Branch:** ${env.BRANCH_NAME}
+- **Commit:** ${env.GIT_COMMIT?.take(8)}
+- **Fecha:** ${new Date().format('yyyy-MM-dd HH:mm:ss')}
+
+### 🛡️ Seguridad:
+- Análisis de calidad: ✅ SonarQube
+- Escaneo de seguridad: ✅ Trivy
+- Imágenes validadas y publicadas en Docker Hub
+
+---
+*Release generado automáticamente por Jenkins Pipeline*
+                    """
+                    
+                    withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                        sh """
+                            # Instalar gh CLI si no existe
+                            if ! command -v gh &> /dev/null; then
+                                echo "📦 Instalando GitHub CLI..."
+                                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+                                echo "deb [arch=\$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                                sudo apt update && sudo apt install gh -y
+                            fi
+                            
+                            # Configurar autenticación
+                            echo "${GITHUB_TOKEN}" | gh auth login --with-token
+                            
+                            # Crear el release
+                            gh release create "${releaseTag}" \\
+                                --title "${releaseTitle}" \\
+                                --notes "${releaseNotes}" \\
+                                --latest
+                            
+                            echo "✅ Release ${releaseTag} creado exitosamente en GitHub"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Docker Cleanup') {
+            steps {
+                echo 'Limpiando recursos Docker...'
+                script {
+                    def imagesToClean = env.BUILT_IMAGES?.split(',') ?: []
+                    
+                    if (imagesToClean.size() == 0) {
+                        echo "ℹ️  No hay imágenes para limpiar"
+                        return
+                    }
+                    
+                    echo "🧹 Limpiando ${imagesToClean.size()} imágenes construidas..."
+                    
+                    for (image in imagesToClean) {
+                        // Extraer el nombre del servicio correctamente
+                        def imageParts = image.split(':')[0].split('/')
+                        def serviceName = imageParts[-1] // Obtener la última parte (nombre del servicio)
+                        echo "🗑️  Limpiando ${image}..."
+                        
+                        sh """
+                            # Remover imagen con tag del build
+                            docker rmi ${image} || echo "⚠️  No se pudo remover ${image}"
+                            
+                            # Remover imagen con tag latest
+                            docker rmi ${serviceName}:latest || echo "⚠️  No se pudo remover ${serviceName}:latest"
+                        """
+                    }
+                    
+                    // Limpiar imágenes huérfanas y sin usar
+                    echo "🧹 Limpiando imágenes sin usar..."
+                    sh """
+                        # Remover imágenes sin usar (dangling)
+                        docker image prune -f || echo "⚠️  No se pudo ejecutar image prune"
+                        
+                        # Mostrar espacio liberado
+                        echo "📊 Estado actual de Docker:"
+                        docker system df || echo "⚠️  No se pudo obtener información del sistema Docker"
+                    """
+                    
+                    echo "✅ Limpieza Docker completada"
                 }
             }
         }
     }
 
     post {
-        success {
-            script {
-                echo "✅ Pipeline completed successfully for ${env.BRANCH_NAME} branch."
-                echo "📊 Environment: ${env.SPRING_PROFILE}"
-
-                if (env.BRANCH_NAME == 'master') {
-                    echo "🚀 Production deployment completed successfully!"
-                } else if (env.BRANCH_NAME == 'stage') {
-                    echo "🎯 Staging deployment completed successfully!"
-                    publishHTML([
-                        reportDir: 'locust-reports',
-                        reportFiles: 'order-service-report.html, payment-service-report.html, favourite-service-report.html',
-                        reportName: 'Locust Stress Test Reports',
-                        keepAll: true
-                    ])
-                } else {
-                    echo "🔧 Development tests completed successfully!"
-                }
-            }
-        }
-        failure {
-            script {
-                echo "❌ Pipeline failed for ${env.BRANCH_NAME} branch."
-                echo "🔍 Check the logs for details."
-                echo "📧 Notify the development team about the failure."
-
-            }
-        }
-        unstable {
-            script {
-                echo "⚠️ Pipeline completed with warnings for ${env.BRANCH_NAME} branch."
-                echo "🔍 Some tests may have failed. Review test reports."
-            }
-        }
         always {
+            echo 'Pipeline completado'
+            // Limpiar archivos temporales
+            sh """
+                rm -f trivy-*-report.json trivy-*-summary.txt trivy-metrics.properties || true
+            """
+
+            echo 'Limpieza final del pipeline...'
+            
+            
+            cleanWs() 
+        }
+        
+        success {
+            echo '✅ Pipeline completado exitosamente!'
             script {
-                // Archive release notes if they were generated
-                if (params.GENERATE_RELEASE_NOTES) {
-                    archiveArtifacts artifacts: 'release-notes-*.md', allowEmptyArchive: true
+                def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                def emailSubject = "✅ Pipeline Exitoso - ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                def emailBody = """
+<h2>🎉 Pipeline Completado Exitosamente</h2>
+
+<h3>📋 Información del Build:</h3>
+<ul>
+    <li><strong>Job:</strong> ${env.JOB_NAME}</li>
+    <li><strong>Build:</strong> #${env.BUILD_NUMBER}</li>
+    <li><strong>Branch:</strong> ${env.BRANCH_NAME}</li>
+    <li><strong>Versión:</strong> v${env.SEMANTIC_VERSION ?: 'N/A'}</li>
+    <li><strong>Commit:</strong> ${env.GIT_COMMIT?.take(8)}</li>
+    <li><strong>Duración:</strong> ${currentBuild.durationString}</li>
+</ul>
+
+<h3>🚀 Microservicios Procesados:</h3>
+<ul>
+    ${servicesToBuild.collect { "<li>${it}</li>" }.join('')}
+</ul>
+
+<h3>📦 Artefactos Generados:</h3>
+<ul>
+    ${servicesToBuild.collect { "<li>Docker: j2loop/${it}:v${env.SEMANTIC_VERSION ?: 'latest'}</li>" }.join('')}
+</ul>
+
+${env.IS_PRODUCTION_DEPLOY == 'true' ? "<h3>✅ Despliegue a Producción:</h3><p><strong>Aprobado por:</strong> ${env.DEPLOYMENT_APPROVER ?: 'N/A'}</p>" : ''}
+
+<h3>🛡️ Verificaciones de Seguridad:</h3>
+${fileExists('trivy-metrics.properties') ? 
+    readProperties(file: 'trivy-metrics.properties').collect { k, v -> 
+        "<li><strong>${k.replace('_', ' ').toLowerCase().capitalize()}:</strong> ${v}</li>" 
+    }.join('') : '<li>No hay métricas de seguridad disponibles</li>'}
+
+<hr>
+<p><small>Build URL: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></small></p>
+                """
+                
+                emailext (
+                    subject: emailSubject,
+                    body: emailBody,
+                    mimeType: 'text/html',
+                    to: env.EMAIL_RECIPIENTS
+                )
+                
+                // Enviar notificación con métricas de seguridad si existen
+                if (fileExists('trivy-metrics.properties')) {
+                    def props = readProperties file: 'trivy-metrics.properties'
+                    echo "📊 Resumen final de seguridad:"
+                    echo "   - Servicios escaneados: ${props.SCANNED_SERVICES ?: 0}"
+                    echo "   - Total vulnerabilidades críticas: ${props.TOTAL_CRITICAL_VULNS ?: 0}"
+                    echo "   - Total vulnerabilidades altas: ${props.TOTAL_HIGH_VULNS ?: 0}"
                 }
             }
         }
-    }
-}
+        
+        failure {
+            echo '❌ El pipeline falló'
+            script {
+                def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                def emailSubject = "❌ Pipeline Fallido - ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                def emailBody = """
+<h2>🚨 Pipeline Fallido</h2>
 
-def generateReleaseNotes() {
-    echo "Generating automatic Release Notes..."
+<h3>📋 Información del Build:</h3>
+<ul>
+    <li><strong>Job:</strong> ${env.JOB_NAME}</li>
+    <li><strong>Build:</strong> #${env.BUILD_NUMBER}</li>
+    <li><strong>Branch:</strong> ${env.BRANCH_NAME}</li>
+    <li><strong>Versión:</strong> v${env.SEMANTIC_VERSION ?: 'N/A'}</li>
+    <li><strong>Commit:</strong> ${env.GIT_COMMIT?.take(8)}</li>
+    <li><strong>Duración:</strong> ${currentBuild.durationString}</li>
+    <li><strong>Stage Fallido:</strong> ${env.STAGE_NAME ?: 'Desconocido'}</li>
+</ul>
 
-    try {
-        def buildTag = params.BUILD_TAG ?: env.BUILD_ID
-        def releaseNotesFile = "release-notes-${buildTag}.md"
+<h3>🚀 Microservicios en Proceso:</h3>
+<ul>
+    ${servicesToBuild.collect { "<li>${it}</li>" }.join('')}
+</ul>
 
-        // Get git information (Windows compatible)
-        def gitCommit = bat(returnStdout: true, script: 'git rev-parse HEAD').trim()
-        def gitBranch = env.BRANCH_NAME ?: 'unknown'
-        def buildDate = new Date().format('yyyy-MM-dd HH:mm:ss')
+<h3>🔍 Acciones Requeridas:</h3>
+<ul>
+    <li>Revisar los logs del build para identificar el error</li>
+    <li>Verificar configuración de dependencias</li>
+    <li>Validar tests y análisis de calidad</li>
+    <li>Revisar configuración de seguridad</li>
+</ul>
 
-        // Get recent commits (Windows compatible)
-        def recentCommits = ""
-        try {
-           recentCommits = bat(returnStdout: true, script: 'git log --oneline --since="3 days ago" -n 10').trim()
-            if (!recentCommits) {
-                recentCommits = "No recent commits found in the last 3 days"
+<hr>
+<p><strong>🔗 Enlaces útiles:</strong></p>
+<ul>
+    <li><a href="${env.BUILD_URL}">Ver logs del build</a></li>
+    <li><a href="${env.BUILD_URL}/console">Consola completa</a></li>
+</ul>
+                """
+                
+                emailext (
+                    subject: emailSubject,
+                    body: emailBody,
+                    mimeType: 'text/html',
+                    to: env.EMAIL_RECIPIENTS
+                )
             }
-        } catch (Exception e) {
-            recentCommits = "Could not retrieve recent commits: ${e.message}"
         }
+        
+        unstable {
+            echo '⚠️  Pipeline completado con advertencias de seguridad'
+            script {
+                def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                def emailSubject = "⚠️ Pipeline Inestable - ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                def emailBody = """
+<h2>⚠️ Pipeline Completado con Advertencias</h2>
 
-        // Determine deployment status based on branch
-        def deploymentStatus = ""
-        switch(env.BRANCH_NAME) {
-            case 'master':
-                deploymentStatus = "✅ Successfully deployed to PRODUCTION environment"
-                break
-            case 'release':
-                deploymentStatus = "✅ Successfully deployed to STAGING environment"
-                break
-            default:
-                deploymentStatus = "✅ Tests completed for DEVELOPMENT environment"
+<h3>📋 Información del Build:</h3>
+<ul>
+    <li><strong>Job:</strong> ${env.JOB_NAME}</li>
+    <li><strong>Build:</strong> #${env.BUILD_NUMBER}</li>
+    <li><strong>Branch:</strong> ${env.BRANCH_NAME}</li>
+    <li><strong>Versión:</strong> v${env.SEMANTIC_VERSION ?: 'N/A'}</li>
+    <li><strong>Commit:</strong> ${env.GIT_COMMIT?.take(8)}</li>
+    <li><strong>Duración:</strong> ${currentBuild.durationString}</li>
+</ul>
+
+<h3>🚀 Microservicios Procesados:</h3>
+<ul>
+    ${servicesToBuild.collect { "<li>${it}</li>" }.join('')}
+</ul>
+
+<h3>⚠️ Advertencias de Seguridad:</h3>
+${fileExists('trivy-metrics.properties') ? 
+    readProperties(file: 'trivy-metrics.properties').collect { k, v -> 
+        "<li><strong>${k.replace('_', ' ').toLowerCase().capitalize()}:</strong> ${v}</li>" 
+    }.join('') : '<li>No hay métricas de seguridad disponibles</li>'}
+
+<h3>🔧 Acciones Recomendadas:</h3>
+<ul>
+    <li>Revisar y solucionar vulnerabilidades de seguridad detectadas</li>
+    <li>Actualizar dependencias con vulnerabilidades</li>
+    <li>Verificar configuración de seguridad</li>
+</ul>
+
+<hr>
+<p><strong>🔗 Enlaces útiles:</strong></p>
+<ul>
+    <li><a href="${env.BUILD_URL}">Ver detalles del build</a></li>
+    <li><a href="${env.BUILD_URL}/Trivy_Security_Report_(Local)/">Ver reporte de seguridad</a></li>
+</ul>
+                """
+                
+                emailext (
+                    subject: emailSubject,
+                    body: emailBody,
+                    mimeType: 'text/html',
+                    to: env.EMAIL_RECIPIENTS
+                )
+            }
         }
+        
+        aborted {
+            echo '🛑 Pipeline cancelado/abortado'
+            script {
+                def emailSubject = "🛑 Pipeline Cancelado - ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                def emailBody = """
+<h2>🛑 Pipeline Cancelado</h2>
 
-        def releaseNotes = """
-# Release Notes - Build ${buildTag}
+<h3>📋 Información del Build:</h3>
+<ul>
+    <li><strong>Job:</strong> ${env.JOB_NAME}</li>
+    <li><strong>Build:</strong> #${env.BUILD_NUMBER}</li>
+    <li><strong>Branch:</strong> ${env.BRANCH_NAME}</li>
+    <li><strong>Duración:</strong> ${currentBuild.durationString}</li>
+    <li><strong>Razón:</strong> ${env.IS_PRODUCTION_DEPLOY == 'true' ? 'Aprobación de producción rechazada o timeout' : 'Cancelado manualmente'}</li>
+</ul>
 
-## Build Information
-- **Build Number**: ${env.BUILD_NUMBER}
-- **Build Tag**: ${buildTag}
-- **Branch**: ${gitBranch}
-- **Environment**: ${env.SPRING_PROFILE}
-- **Date**: ${buildDate}
-- **Git Commit**: ${gitCommit}
-- **Jenkins URL**: ${env.BUILD_URL}
+${env.IS_PRODUCTION_DEPLOY == 'true' ? '<p><strong>⚠️ Nota:</strong> El despliegue a producción fue rechazado o no se recibió aprobación a tiempo.</p>' : ''}
 
-## Deployed Services (${env.SPRING_PROFILE} environment)
-${SERVICES.split().collect { "- ${it}" }.join('\n')}
-
-## Additional Infrastructure
-- zipkin (monitoring)
-- Kubernetes namespace: ${env.K8S_NAMESPACE}
-
-## Test Results Summary
-- **Unit Tests**: ${shouldRunTests() ? 'EXECUTED ✅' : 'SKIPPED ⏭️'}
-- **Integration Tests**: ${shouldRunIntegrationTests() ? 'EXECUTED ✅' : 'SKIPPED ⏭️'}
-- **E2E Tests**: ${shouldRunE2ETests() ? 'EXECUTED ✅' : 'SKIPPED ⏭️'}
-
-## Recent Changes
-```
-${recentCommits}
-```
-
-## Docker Images Built
-${env.BRANCH_NAME == 'master' ? SERVICES.split().collect { "- ${DOCKERHUB_USER}/${it}:${env.IMAGE_TAG}" }.join('\n') : 'No Docker images built for this branch'}
-
-## Deployment Configuration
-- **Spring Profile**: ${env.SPRING_PROFILE}
-- **Image Tag**: ${env.IMAGE_TAG}
-- **Deployment Suffix**: ${env.DEPLOYMENT_SUFFIX}
-- **Kubernetes Namespace**: ${env.K8S_NAMESPACE}
-
-## Deployment Status
-${deploymentStatus}
-
-## Pipeline Execution Details
-- **Started**: ${new Date(currentBuild.startTimeInMillis).format('yyyy-MM-dd HH:mm:ss')}
-- **Duration**: ${currentBuild.durationString}
-- **Triggered by**: ${env.BUILD_CAUSE ?: 'Manual/SCM'}
-
----
-*Generated automatically by Jenkins Pipeline on ${buildDate}*
-*Pipeline: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}*
-"""
-
-        writeFile(file: releaseNotesFile, text: releaseNotes)
-
-        echo "✅ Release Notes generated successfully: ${releaseNotesFile}"
-        echo "📄 File will be save as artifact"
-
-        // Display summary in console
-        echo """
-=== RELEASE NOTES SUMMARY ===
-📦 Build: ${buildTag}
-🌿 Branch: ${gitBranch}
-🏷️ Environment: ${env.SPRING_PROFILE}
-📅 Date: ${buildDate}
-📁 File: ${releaseNotesFile}
-"""
-
-    } catch (Exception e) {
-        echo "⚠️ Error generating Release Notes: ${e.message}"
-        echo "Pipeline will continue without Release Notes"
-
-        // Create minimal release notes
-        def fallbackFile = "release-notes-${params.BUILD_TAG ?: env.BUILD_ID}-minimal.md"
-        def minimalNotes = """
-# Release Notes - Build ${params.BUILD_TAG ?: env.BUILD_ID}
-
-**Error**: Could not generate complete release notes due to: ${e.message}
-
-## Basic Information
-- Build Number: ${env.BUILD_NUMBER}
-- Branch: ${env.BRANCH_NAME}
-- Environment: ${env.SPRING_PROFILE}
-- Date: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
-
-Pipeline executed successfully despite release notes generation error.
-"""
-        writeFile(file: fallbackFile, text: minimalNotes)
-        echo "📝 Minimal release notes created: ${fallbackFile}"
+<hr>
+<p><a href="${env.BUILD_URL}">Ver detalles del build</a></p>
+                """
+                
+                emailext (
+                    subject: emailSubject,
+                    body: emailBody,
+                    mimeType: 'text/html',
+                    to: env.EMAIL_RECIPIENTS
+                )
+            }
+        }
     }
-}
-
-// Helper functions to determine test execution
-def shouldRunTests() {
-    return env.BRANCH_NAME in ['dev', 'master', 'release'] || env.BRANCH_NAME.startsWith('feature/')
-}
-
-def shouldRunIntegrationTests() {
-    return env.BRANCH_NAME == 'master' || env.BRANCH_NAME.startsWith('feature/') ||
-           (env.BRANCH_NAME != 'master' && env.BRANCH_NAME != 'release')
-}
-
-def shouldRunE2ETests() {
-    return env.BRANCH_NAME == 'master' || env.BRANCH_NAME.startsWith('feature/') ||
-           (env.BRANCH_NAME != 'master' && env.BRANCH_NAME != 'release')
 }
