@@ -638,7 +638,7 @@ ${servicesToBuild.collect { "- ${it}" }.join('\n')}
 - **Build Date**: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
 
 ## 🐳 Docker Images
-${servicesToBuild.collect { "- \`j2loop/${it}:${env.BUILD_NUMBER}\`" }.join('\n')}
+${servicesToBuild.collect { "- `j2loop/${it}:${env.BUILD_NUMBER}`" }.join('\n')}
 
 ## 📊 Pipeline Status
 - ✅ Tests: Passed
