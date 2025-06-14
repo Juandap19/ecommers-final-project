@@ -2,7 +2,6 @@
 
 pipeline {
     agent any
-    
      tools {
         jdk 'jdk-17' // Use the name you defined in the Jenkins Tools section
     }
@@ -214,14 +213,15 @@ pipeline {
                 } else if (currentBuild.result == 'ABORTED') {
                     notificationStages.sendAbortedNotification()
                 }
-            }
-
-            cleanup {
-            script {
-                // This calls the cleanup function from your library, which is good practice
                 notificationStages.cleanup("Pipeline cleanup completed")
             }
-        }
+
+            
+                
+                    // This calls the cleanup function from your library, which is good practice
+                    
+                
+            
         }
         
     }
