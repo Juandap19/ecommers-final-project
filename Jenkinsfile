@@ -214,8 +214,10 @@ pipeline {
             }
         }
         cleanup {
-            // This calls the cleanup function from your library, which is good practice
-            notificationStages.cleanup()
+            script {
+                // This calls the cleanup function from your library, which is good practice
+                notificationStages.cleanup("Pipeline cleanup completed")
+            }
         }
     }
 }
