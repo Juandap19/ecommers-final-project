@@ -293,24 +293,26 @@ pipeline {
                             }
                         }
                         
-                        env.LOCAL_IMAGES = localImages.join(',')
-                        env.BUILT_IMAGES = localImages.join(',')
+                        // --- LA SOLUCIÓN DEFINITIVA PARA IMÁGENES ---
+                        // Escribimos las imágenes en un archivo en el workspace (igual que con services)
+                        def imagesString = localImages.join(',')
+                        writeFile file: 'local_images.txt', text: imagesString
                         
-                        // Save images list to file for other stages
-                        writeFile file: 'local_images.txt', text: localImages.join(',')
+                        // Usamos 'stash' para asegurar que el archivo esté disponible para las siguientes etapas
                         stash name: 'docker-images', includes: 'local_images.txt'
                         
-                        if (localImages.isEmpty()) {
+                        if (localImages.size() == 0) {
                             echo "⚠️ No se construyeron imágenes Docker"
                             currentBuild.result = 'UNSTABLE'
                         } else {
-                            echo "✅ Imágenes Docker construidas: ${localImages.join(', ')}"
-                            echo "🐛 DEBUG: LOCAL_IMAGES env var set to: ${env.LOCAL_IMAGES}"
+                            echo "✅ Imágenes Docker construidas y guardadas en 'local_images.txt': ${localImages.join(', ')}"
                         }
                     } else {
                         echo "No hay servicios para construir imágenes Docker"
-                        env.LOCAL_IMAGES = ''
-                        env.BUILT_IMAGES = ''
+                        
+                        // Crear archivo vacío para las siguientes etapas
+                        writeFile file: 'local_images.txt', text: ''
+                        stash name: 'docker-images', includes: 'local_images.txt'
                     }
                 }
             }
@@ -320,27 +322,18 @@ pipeline {
             steps {
                 script {
                     try {
+                        // Obtener imágenes del archivo (igual que con services)
+                        unstash 'docker-images'
                         def localImages = []
                         
-                        // Try to get images from stash first
-                        try {
-                            unstash 'docker-images'
-                            if (fileExists('local_images.txt')) {
-                                def imagesString = readFile('local_images.txt').trim()
-                                if (!imagesString.isEmpty()) {
-                                    localImages = imagesString.split(',')
-                                }
+                        if (fileExists('local_images.txt')) {
+                            def imagesString = readFile('local_images.txt').trim()
+                            if (imagesString && imagesString.length() > 0) {
+                                localImages = imagesString.split(',')
                             }
-                        } catch (Exception stashError) {
-                            echo "⚠️ No se pudo obtener imágenes del stash: ${stashError.getMessage()}"
                         }
                         
-                        // Fallback to environment variable
-                        if (localImages.isEmpty() && env.LOCAL_IMAGES) {
-                            localImages = env.LOCAL_IMAGES.split(',')
-                        }
-                        
-                        echo "🐛 DEBUG: Found ${localImages.size()} images for security scan: ${localImages.join(', ')}"
+                        echo "🔍 Imágenes encontradas para escaneo de seguridad: ${localImages.join(', ')}"
                         
                         if (localImages.size() > 0) {
                             securityStages.runAllSecurityScans(localImages, params.SKIP_SECURITY_SCAN)
@@ -359,27 +352,18 @@ pipeline {
         stage('Push Images') {
             steps {
                 script {
+                    // Obtener imágenes del archivo (igual que con services)
+                    unstash 'docker-images'
                     def localImages = []
                     
-                    // Try to get images from stash first
-                    try {
-                        unstash 'docker-images'
-                        if (fileExists('local_images.txt')) {
-                            def imagesString = readFile('local_images.txt').trim()
-                            if (!imagesString.isEmpty()) {
-                                localImages = imagesString.split(',')
-                            }
+                    if (fileExists('local_images.txt')) {
+                        def imagesString = readFile('local_images.txt').trim()
+                        if (imagesString && imagesString.length() > 0) {
+                            localImages = imagesString.split(',')
                         }
-                    } catch (Exception stashError) {
-                        echo "⚠️ No se pudo obtener imágenes del stash: ${stashError.getMessage()}"
                     }
                     
-                    // Fallback to environment variable
-                    if (localImages.isEmpty() && env.LOCAL_IMAGES) {
-                        localImages = env.LOCAL_IMAGES.split(',')
-                    }
-                    
-                    echo "🐛 DEBUG: Found ${localImages.size()} images to push: ${localImages.join(', ')}"
+                    echo "🚀 Imágenes encontradas para subir: ${localImages.join(', ')}"
                     
                     if (localImages.size() > 0) {
                         echo "🚀 Subiendo imágenes a Docker Hub: ${localImages.join(', ')}"
