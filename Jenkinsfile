@@ -89,60 +89,62 @@ pipeline {
             steps {
                 script {
                     echo "🔍 Inicializando detección de servicios..."
-                    def servicesToBuildList = []
-                    
-                    try {
-                        // Llama a la función de la biblioteca compartida
-                        def detectedServices = buildStages.detectServicesToBuild(params)
-                        
-                        echo "✅ Biblioteca compartió: ${detectedServices}"
+                    def servicesToBuildList = [] // Usar siempre una variable local para la lógica
 
-                        // Asegurarse de que es una lista y filtrar valores nulos/vacíos
+                    try {
+                        def detectedServices = buildStages.detectServicesToBuild(params)
+                        echo "✅ Biblioteca compartió: ${detectedServices}"
+                        
+                        // Asegurarnos de que el resultado sea una lista limpia de strings
                         if (detectedServices instanceof List) {
-                            servicesToBuildList = detectedServices.findAll { it } // a.k.a. it != null && it != ''
+                            servicesToBuildList = detectedServices.collect { it.toString() }.findAll { !it.isEmpty() }
                         } else if (detectedServices) {
                             servicesToBuildList = [detectedServices.toString()]
                         }
 
-                        if (servicesToBuildList.isEmpty()) {
-                            echo "⚠️ La biblioteca no detectó servicios. Usando fallback."
-                            // Lanza una excepción para entrar en el bloque catch y usar la lógica de emergencia
-                            throw new Exception("No services detected by library")
-                        }
-
-                    } catch (Exception e) {
-                        echo "⚠️ Error o fallback: ${e.getMessage()}"
-                        echo "🔧 Intentando detección de emergencia basada en directorios..."
+                    } catch (e) {
+                        echo "⚠️ Error llamando a la biblioteca: ${e.message}. Usando fallback."
+                    }
+                    
+                    // Si la lista está vacía después del primer intento, usar el fallback
+                    if (servicesToBuildList.isEmpty()) {
+                        echo "🔧 Lógica de emergencia activada..."
                         def possibleServices = [
                             'api-gateway', 'service-discovery', 'cloud-config',
                             'user-service', 'product-service', 'order-service',
                             'payment-service', 'shipping-service', 'favourite-service',
                             'proxy-client'
                         ]
-                        
-                        servicesToBuildList = possibleServices.findAll { service ->
-                            if (fileExists("${service}/pom.xml")) {
-                                echo "🚨 Servicio de emergencia encontrado: ${service}"
-                                return true
-                            }
-                            return false
+                        servicesToBuildList = possibleServices.findAll { service -> 
+                            fileExists("${service}/pom.xml") 
                         }
                     }
-
-                    // Asignación final y validación
-                    if (!servicesToBuildList.isEmpty()) {
-                        env.SERVICES_TO_BUILD = servicesToBuildList.join(',')
-                        echo "✅ Servicios a construir establecidos: ${env.SERVICES_TO_BUILD}"
-                    } else {
-                        // Fallback absoluto si todo falla
-                        echo "❌ Fallback absoluto. No se detectó ningún servicio."
-                        env.SERVICES_TO_BUILD = 'user-service,product-service' // Un default seguro
-                        currentBuild.result = 'UNSTABLE'
-                        echo "🆘 Estableciendo servicios por defecto: ${env.SERVICES_TO_BUILD}"
-                    }
                     
+                    // Si AÚN está vacía, usar un valor por defecto para no romper el pipeline
+                    if (servicesToBuildList.isEmpty()) {
+                        echo "🚨 Fallback absoluto: No se pudo detectar ningún servicio."
+                        servicesToBuildList = ['user-service', 'product-service'] // Un valor por defecto seguro
+                        currentBuild.result = 'UNSTABLE'
+                    }
+
+                    // --- PARTE CRÍTICA DE LA SOLUCIÓN ---
+                    // 1. Crear el string final en una variable local.
+                    def servicesString = servicesToBuildList.join(',')
+                    
+                    // 2. Asignar la variable local al entorno de Jenkins.
+                    env.SERVICES_TO_BUILD = servicesString
+                    
+                    // 3. Imprimir ambas variables para depuración. Esto nos dirá si la asignación funcionó.
+                    echo "-> VALOR LOCAL A ASIGNAR: '${servicesString}'"
+                    echo "-> VALOR EN ENV DESPUÉS DE ASIGNAR: '${env.SERVICES_TO_BUILD}'"
+
+                    // Validar que la variable de entorno no esté vacía antes de continuar
+                    if (!env.SERVICES_TO_BUILD) {
+                        error("¡FALLO CRÍTICO! No se pudo establecer la variable SERVICES_TO_BUILD.")
+                    }
+
                     // Lógica adicional del stage
-                    if (env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'main') {
+                    if (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') {
                         env.IS_PRODUCTION_DEPLOY = 'true'
                         echo "🚀 Despliegue a PRODUCCIÓN detectado"
                     }
