@@ -99,6 +99,14 @@ pipeline {
                         } else if (detectedServices) {
                             servicesToBuildList = [detectedServices.toString()]
                         }
+                        
+                        // Fix service name mapping issues
+                        servicesToBuildList = servicesToBuildList.collect { service ->
+                            if (service == 'proxy-service') {
+                                return 'proxy-client'
+                            }
+                            return service
+                        }
                     } catch (e) {
                         echo "⚠️ Error llamando a la biblioteca: ${e.message}. Usando fallback."
                     }
@@ -252,54 +260,50 @@ pipeline {
                     def servicesString = readFile('services_to_build.txt').trim()
                     def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
-                        try {
-                            def images = buildStages.buildDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
-                            env.LOCAL_IMAGES = images.local.join(',')
-                            env.BUILT_IMAGES = images.built.join(',')
-                        } catch (Exception e) {
-                            echo "⚠️ Error construyendo imágenes Docker: ${e.getMessage()}"
-                            echo "Intentando construir imágenes localmente..."
-                            
-                            // Fallback: Build Docker images locally with validation
-                            def localImages = []
-                            def builtImages = []
-                            
-                            servicesToBuild.each { service ->
-                                try {
-                                    if (fileExists("${service}/Dockerfile")) {
-                                        // Verificar que el JAR existe (como en shared library)
-                                        def jarExists = sh(
-                                            script: "ls ${service}/target/*.jar 2>/dev/null | wc -l",
-                                            returnStdout: true
-                                        ).trim()
-                                        
-                                        if (jarExists == "0") {
-                                            echo "❌ No se encontró JAR para ${service}. Saltando construcción Docker."
-                                        } else {
-                                            echo "🐳 Construyendo imagen Docker para ${service}..."
-                                            def imageName = "${env.DOCKERHUB_USERNAME}/${service}:${env.BUILD_NUMBER}"
-                                            sh "docker build -t ${imageName} ${service}/"
-                                            localImages.add(imageName)
-                                            echo "✅ Imagen construida: ${imageName}"
-                                        }
+                        echo "🐳 Construyendo imágenes Docker para servicios: ${servicesToBuild.join(', ')}"
+                        
+                        // Build Docker images locally with validation
+                        def localImages = []
+                        def builtImages = []
+                        
+                        servicesToBuild.each { service ->
+                            try {
+                                if (fileExists("${service}/Dockerfile")) {
+                                    // Verificar que el JAR existe
+                                    def jarExists = sh(
+                                        script: "ls ${service}/target/*.jar 2>/dev/null | wc -l",
+                                        returnStdout: true
+                                    ).trim()
+                                    
+                                    if (jarExists == "0") {
+                                        echo "❌ No se encontró JAR para ${service}. Saltando construcción Docker."
                                     } else {
-                                        echo "⚠️ No se encontró Dockerfile en ${service}/"
+                                        echo "🐳 Construyendo imagen Docker para ${service}..."
+                                        def imageName = "${env.DOCKERHUB_USERNAME}/${service}:${env.BUILD_NUMBER}"
+                                        sh "docker build -t ${imageName} ${service}/"
+                                        localImages.add(imageName)
+                                        echo "✅ Imagen construida: ${imageName}"
                                     }
-                                } catch (Exception dockerError) {
-                                    echo "❌ Error construyendo Docker para ${service}: ${dockerError.getMessage()}"
+                                } else {
+                                    echo "⚠️ No se encontró Dockerfile en ${service}/"
                                 }
-                            }
-                            
-                            env.LOCAL_IMAGES = localImages.join(',')
-                            env.BUILT_IMAGES = localImages.join(',')
-                            
-                            if (localImages.isEmpty()) {
-                                echo "⚠️ No se construyeron imágenes Docker"
+                            } catch (Exception dockerError) {
+                                echo "❌ Error construyendo Docker para ${service}: ${dockerError.getMessage()}"
                                 currentBuild.result = 'UNSTABLE'
                             }
                         }
+                        
+                        env.LOCAL_IMAGES = localImages.join(',')
+                        env.BUILT_IMAGES = localImages.join(',')
+                        
+                        if (localImages.isEmpty()) {
+                            echo "⚠️ No se construyeron imágenes Docker"
+                            currentBuild.result = 'UNSTABLE'
+                        } else {
+                            echo "✅ Imágenes Docker construidas: ${localImages.join(', ')}"
+                        }
                     } else {
-                        echo "No hay servicios para construir imagenes Docker"
+                        echo "No hay servicios para construir imágenes Docker"
                         env.LOCAL_IMAGES = ''
                         env.BUILT_IMAGES = ''
                     }
@@ -329,13 +333,34 @@ pipeline {
         stage('Push Images') {
             steps {
                 script {
-                    unstash 'build-info'
-                    def servicesString = readFile('services_to_build.txt').trim()
-                    def servicesToBuild = servicesString.split(',')
-                    if (servicesToBuild.size() > 0) {
-                        deploymentStages.pushDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
+                    if (env.LOCAL_IMAGES && !env.LOCAL_IMAGES.isEmpty()) {
+                        def localImages = env.LOCAL_IMAGES.split(',')
+                        echo "🚀 Subiendo imágenes a Docker Hub: ${localImages.join(', ')}"
+                        
+                        withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh '''
+                                echo "🔐 Iniciando sesión en Docker Hub..."
+                                echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                            '''
+                            
+                            localImages.each { imageName ->
+                                try {
+                                    echo "⬆️ Subiendo imagen: ${imageName}"
+                                    sh "docker push ${imageName}"
+                                    echo "✅ Imagen subida: ${imageName}"
+                                } catch (Exception pushError) {
+                                    echo "❌ Error subiendo imagen ${imageName}: ${pushError.getMessage()}"
+                                    currentBuild.result = 'UNSTABLE'
+                                }
+                            }
+                            
+                            sh '''
+                                echo "🔓 Cerrando sesión de Docker Hub..."
+                                docker logout
+                            '''
+                        }
                     } else {
-                        echo "No hay servicios para subir imagenes"
+                        echo "No hay imágenes locales para subir"
                     }
                 }
             }
