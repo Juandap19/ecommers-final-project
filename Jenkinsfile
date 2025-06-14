@@ -346,6 +346,7 @@ pipeline {
                                         echo "🔍 Escaneando seguridad de imagen: ${imageName}"
                                         
                                         // Run Trivy security scan
+                                        def imageShortName = imageName.split('/').last().replace(':', '-')
                                         sh """
                                             echo "🛡️ Iniciando escaneo con Trivy para ${imageName}..."
                                             
@@ -360,7 +361,7 @@ pipeline {
                                             fi
                                             
                                             # Ejecutar escaneo de seguridad
-                                            trivy image --format json --output trivy-${imageName##*/}.json ${imageName} || echo "⚠️ Trivy scan completed with warnings"
+                                            trivy image --format json --output trivy-${imageShortName}.json ${imageName} || echo "⚠️ Trivy scan completed with warnings"
                                             
                                             # Generar reporte legible
                                             trivy image --format table ${imageName} || echo "⚠️ Trivy report completed with warnings"
