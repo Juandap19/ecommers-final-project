@@ -296,11 +296,16 @@ pipeline {
                         env.LOCAL_IMAGES = localImages.join(',')
                         env.BUILT_IMAGES = localImages.join(',')
                         
+                        // Save images list to file for other stages
+                        writeFile file: 'local_images.txt', text: localImages.join(',')
+                        stash name: 'docker-images', includes: 'local_images.txt'
+                        
                         if (localImages.isEmpty()) {
                             echo "⚠️ No se construyeron imágenes Docker"
                             currentBuild.result = 'UNSTABLE'
                         } else {
                             echo "✅ Imágenes Docker construidas: ${localImages.join(', ')}"
+                            echo "🐛 DEBUG: LOCAL_IMAGES env var set to: ${env.LOCAL_IMAGES}"
                         }
                     } else {
                         echo "No hay servicios para construir imágenes Docker"
@@ -315,7 +320,28 @@ pipeline {
             steps {
                 script {
                     try {
-                        def localImages = env.LOCAL_IMAGES?.split(',') ?: []
+                        def localImages = []
+                        
+                        // Try to get images from stash first
+                        try {
+                            unstash 'docker-images'
+                            if (fileExists('local_images.txt')) {
+                                def imagesString = readFile('local_images.txt').trim()
+                                if (!imagesString.isEmpty()) {
+                                    localImages = imagesString.split(',')
+                                }
+                            }
+                        } catch (Exception stashError) {
+                            echo "⚠️ No se pudo obtener imágenes del stash: ${stashError.getMessage()}"
+                        }
+                        
+                        // Fallback to environment variable
+                        if (localImages.isEmpty() && env.LOCAL_IMAGES) {
+                            localImages = env.LOCAL_IMAGES.split(',')
+                        }
+                        
+                        echo "🐛 DEBUG: Found ${localImages.size()} images for security scan: ${localImages.join(', ')}"
+                        
                         if (localImages.size() > 0) {
                             securityStages.runAllSecurityScans(localImages, params.SKIP_SECURITY_SCAN)
                         } else {
@@ -333,8 +359,29 @@ pipeline {
         stage('Push Images') {
             steps {
                 script {
-                    if (env.LOCAL_IMAGES && !env.LOCAL_IMAGES.isEmpty()) {
-                        def localImages = env.LOCAL_IMAGES.split(',')
+                    def localImages = []
+                    
+                    // Try to get images from stash first
+                    try {
+                        unstash 'docker-images'
+                        if (fileExists('local_images.txt')) {
+                            def imagesString = readFile('local_images.txt').trim()
+                            if (!imagesString.isEmpty()) {
+                                localImages = imagesString.split(',')
+                            }
+                        }
+                    } catch (Exception stashError) {
+                        echo "⚠️ No se pudo obtener imágenes del stash: ${stashError.getMessage()}"
+                    }
+                    
+                    // Fallback to environment variable
+                    if (localImages.isEmpty() && env.LOCAL_IMAGES) {
+                        localImages = env.LOCAL_IMAGES.split(',')
+                    }
+                    
+                    echo "🐛 DEBUG: Found ${localImages.size()} images to push: ${localImages.join(', ')}"
+                    
+                    if (localImages.size() > 0) {
                         echo "🚀 Subiendo imágenes a Docker Hub: ${localImages.join(', ')}"
                         
                         withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -443,7 +490,79 @@ pipeline {
                     def servicesString = readFile('services_to_build.txt').trim()
                     def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
-                        runLoadTests(servicesToBuild)
+                        echo "🧪 Ejecutando pruebas de carga para servicios: ${servicesToBuild.join(', ')}"
+                        
+                        try {
+                            // Run load tests inline
+                            if (fileExists("locust")) {
+                                sh '''
+                                    cd locust
+                                    echo "🐛 Preparando entorno Locust..."
+                                    
+                                    # Instalar dependencias de Python si no existen
+                                    if ! command -v python3 &> /dev/null; then
+                                        echo "📦 Instalando Python3..."
+                                        apt-get update && apt-get install -y python3 python3-pip
+                                    fi
+                                    
+                                    # Verificar si existe requirements.txt
+                                    if [ -f "requirements.txt" ]; then
+                                        # Instalar dependencias de Locust
+                                        pip3 install -r requirements.txt
+                                    else
+                                        # Instalar Locust directamente
+                                        pip3 install locust
+                                    fi
+                                    
+                                    # Configurar URL base para las pruebas
+                                    export LOCUST_HOST=${LOCUST_HOST:-http://localhost:8080}
+                                    
+                                    echo "🚀 Iniciando pruebas de carga..."
+                                    
+                                    # Verificar si existe locustfile.py
+                                    if [ -f "locustfile.py" ]; then
+                                        # Ejecutar Locust en modo headless
+                                        locust -f locustfile.py \
+                                            --headless \
+                                            --users 10 \
+                                            --spawn-rate 2 \
+                                            --run-time 2m \
+                                            --host $LOCUST_HOST \
+                                            --html locust-report.html \
+                                            --csv locust-stats
+                                    else
+                                        echo "⚠️ No se encontró locustfile.py, creando prueba básica..."
+                                        echo 'from locust import HttpUser, task
+class BasicUser(HttpUser):
+    @task
+    def test_health(self):
+        self.client.get("/health", catch_response=True)' > locustfile.py
+                                        
+                                        locust -f locustfile.py \
+                                            --headless \
+                                            --users 5 \
+                                            --spawn-rate 1 \
+                                            --run-time 1m \
+                                            --host $LOCUST_HOST \
+                                            --html locust-report.html \
+                                            --csv locust-stats
+                                    fi
+                                    
+                                    echo "✅ Pruebas de carga completadas"
+                                    
+                                    # Mostrar resumen de resultados
+                                    if [ -f "locust-stats_stats.csv" ]; then
+                                        echo "📊 Resumen de pruebas de carga:"
+                                        head -5 locust-stats_stats.csv
+                                    fi
+                                '''
+                            } else {
+                                echo "📁 Directorio locust no encontrado, saltando pruebas de carga"
+                            }
+                        } catch (Exception e) {
+                            echo "⚠️ Error ejecutando pruebas de carga: ${e.getMessage()}"
+                            currentBuild.result = 'UNSTABLE'
+                        }
                     } else {
                         echo "No hay servicios para pruebas de carga"
                     }
@@ -451,7 +570,27 @@ pipeline {
             }
             post {
                 always {
-                    publishLoadTestResults()
+                    script {
+                        try {
+                            // Publish load test results inline
+                            if (fileExists("locust/locust-report.html")) {
+                                publishHTML([
+                                    allowMissing: true,
+                                    alwaysLinkToLastBuild: true,
+                                    keepAll: true,
+                                    reportDir: 'locust',
+                                    reportFiles: 'locust-report.html',
+                                    reportName: 'Locust Load Test Report'
+                                ])
+                            }
+                            
+                            archiveArtifacts artifacts: 'locust/locust-stats*.csv,locust/locust-report.html', 
+                                           fingerprint: true, 
+                                           allowEmptyArchive: true
+                        } catch (Exception e) {
+                            echo "⚠️ Error publicando resultados de pruebas de carga: ${e.getMessage()}"
+                        }
+                    }
                 }
             }
         }
