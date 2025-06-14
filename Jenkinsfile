@@ -144,7 +144,9 @@ pipeline {
         stage('Tests') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
                         try {
                             testStages.runAllTests(servicesToBuild)
@@ -184,12 +186,9 @@ pipeline {
                     def servicesString = readFile('services_to_build.txt').trim()
                     def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
+                        echo "📦 Empaquetando microservicios usando lógica local..."
                         try {
-                            buildStages.packageMicroservices(servicesToBuild)
-                        } catch (Exception e) {
-                            echo "⚠️ Error empaquetando microservicios: ${e.getMessage()}"
-                            echo "Intentando empaquetar localmente (usando lógica de shared library)..."
-                            // Fallback: package locally using shared library approach
+                            // Direct packaging without shared library call
                             servicesToBuild.each { service ->
                                 try {
                                     echo "📦 Empaquetando ${service}..."
@@ -212,6 +211,9 @@ pipeline {
                                     echo "❌ Error empaquetando ${service}: ${localError.getMessage()}"
                                 }
                             }
+                        } catch (Exception e) {
+                            echo "⚠️ Error empaquetando microservicios: ${e.getMessage()}"
+                            currentBuild.result = 'UNSTABLE'
                         }
                     } else {
                         echo "No hay servicios para empaquetar"
