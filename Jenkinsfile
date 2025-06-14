@@ -88,154 +88,31 @@ pipeline {
         stage('Detect Services') {
             steps {
                 script {
+                    echo "🔍 Inicializando detección de servicios..."
+                    def servicesToBuildList = []
+                    
                     try {
-                        // First try the library function
-                        def servicesToBuild = []
-                        echo "🔍 Inicializando detección de servicios..."
-                        echo "🔍 Parámetro MICROSERVICE: ${params.MICROSERVICE}"
-                        echo "🔍 Branch actual: ${env.BRANCH_NAME}"
-                        echo "🔍 Change target: ${env.CHANGE_TARGET}"
+                        // Llama a la función de la biblioteca compartida
+                        def detectedServices = buildStages.detectServicesToBuild(params)
                         
-                        try {
-                            def detectedServices = buildStages.detectServicesToBuild(params)
-                            echo "✅ Biblioteca compartida detectó servicios: ${detectedServices}"
-                            echo "🔍 Tipo de datos: ${detectedServices.getClass()}"
-                            echo "🔍 Es lista: ${detectedServices instanceof List}"
-                            echo "🔍 Tamaño: ${detectedServices?.size()}"
-                            
-                            // Convert to proper list if needed
-                            if (detectedServices instanceof List) {
-                                servicesToBuild = detectedServices.findAll { it != null && it != '' }
-                            } else if (detectedServices) {
-                                servicesToBuild = [detectedServices.toString()]
-                            }
-                            
-                            echo "🎯 Servicios procesados: ${servicesToBuild}"
-                        } catch (Exception libError) {
-                            echo "⚠️ Error en biblioteca compartida: ${libError.getMessage()}"
-                            echo "🔍 Detectando servicios automáticamente..."
-                            
-                            // Fallback: Replicate shared library logic
-                            def microservices = [
-                                'api-gateway',
-                                'service-discovery', 
-                                'cloud-config',
-                                'user-service',
-                                'product-service',
-                                'order-service',
-                                'payment-service',
-                                'shipping-service',
-                                'favourite-service',
-                                'proxy-client'
-                            ]
-                            def servicesToDetect = []
-                            
-                            // Check if it's a PR (similar to shared library logic)
-                            if (env.CHANGE_TARGET) {
-                                echo "🔄 PR detectado, analizando cambios..."
-                                try {
-                                    def changes = sh(
-                                        script: "git diff --name-only origin/${env.CHANGE_TARGET}...HEAD",
-                                        returnStdout: true
-                                    ).trim().split('\n')
-                                    
-                                    servicesToDetect = microservices.findAll { service ->
-                                        changes.any { it.startsWith("${service}/") }
-                                    }
-                                    echo "📝 Cambios detectados en: ${changes.join(', ')}"
-                                    echo "🎯 Servicios afectados: ${servicesToDetect.join(', ')}"
-                                } catch (Exception gitError) {
-                                    echo "⚠️ Error detectando cambios: ${gitError.getMessage()}"
-                                    servicesToDetect = []
-                                }
-                            } else {
-                                // Build manual o push a main
-                                def serviceToBuild = params.MICROSERVICE ?: 'ALL'
-                                if (serviceToBuild == 'ALL') {
-                                    servicesToDetect = microservices.findAll { service ->
-                                        fileExists("${service}/pom.xml")
-                                    }
-                                    echo "🎯 Construyendo TODOS los microservicios disponibles"
-                                } else {
-                                    servicesToDetect = [serviceToBuild]
-                                    echo "📋 Construyendo microservicio específico: ${serviceToBuild}"
-                                }
-                            }
-                            
-                            // Default para testing si no se encuentra nada (como en shared library)
-                            if (servicesToDetect.isEmpty()) {
-                                echo "ℹ️ No se detectaron cambios en microservicios"
-                                servicesToDetect = ['user-service'] // Default como en la biblioteca
-                                echo "🔧 Usando servicio por defecto para testing"
-                            }
-                            
-                            // Verificar que los servicios existen
-                            servicesToBuild = servicesToDetect.findAll { service ->
-                                if (fileExists("${service}/pom.xml")) {
-                                    echo "✅ Verificado: ${service}"
-                                    return true
-                                } else {
-                                    echo "⚠️ ${service} no tiene pom.xml, omitiendo..."
-                                    return false
-                                }
-                            }
+                        echo "✅ Biblioteca compartió: ${detectedServices}"
+
+                        // Asegurarse de que es una lista y filtrar valores nulos/vacíos
+                        if (detectedServices instanceof List) {
+                            servicesToBuildList = detectedServices.findAll { it } // a.k.a. it != null && it != ''
+                        } else if (detectedServices) {
+                            servicesToBuildList = [detectedServices.toString()]
                         }
-                        
-                        // Ensure we have services to build
-                        if (!servicesToBuild || servicesToBuild.isEmpty()) {
-                            echo "⚠️ No se detectaron servicios, usando servicios por defecto..."
-                            servicesToBuild = ['user-service', 'product-service']
+
+                        if (servicesToBuildList.isEmpty()) {
+                            echo "⚠️ La biblioteca no detectó servicios. Usando fallback."
+                            // Lanza una excepción para entrar en el bloque catch y usar la lógica de emergencia
+                            throw new Exception("No services detected by library")
                         }
-                        
-                        // Safe conversion to string with validation
-                        def servicesString = ''
-                        if (servicesToBuild && servicesToBuild.size() > 0) {
-                            try {
-                                // Ensure all elements are strings and not null
-                                def cleanServices = servicesToBuild.findAll { it != null }.collect { it.toString() }
-                                servicesString = cleanServices.join(',')
-                                echo "✅ Join exitoso: ${servicesString}"
-                            } catch (Exception joinError) {
-                                echo "⚠️ Error en join: ${joinError.getMessage()}"
-                                // Fallback: manual concatenation
-                                def manualString = ""
-                                servicesToBuild.eachWithIndex { service, index ->
-                                    if (service != null) {
-                                        if (index > 0) manualString += ","
-                                        manualString += service.toString()
-                                    }
-                                }
-                                servicesString = manualString
-                                echo "✅ Join manual: ${servicesString}"
-                            }
-                        }
-                        
-                        // Validate the string before assignment
-                        if (servicesString && servicesString.trim() != '') {
-                            env.SERVICES_TO_BUILD = servicesString
-                            echo "🔨 Servicios finales para construir: '${env.SERVICES_TO_BUILD}'"
-                            echo "🔨 Longitud del string: ${env.SERVICES_TO_BUILD?.length()}"
-                        } else {
-                            echo "❌ Error: String de servicios vacío"
-                            throw new Exception("No se pudo generar lista de servicios válida")
-                        }
-                        
-                        // Determinar si es despliegue a producción (como en shared library)
-                        if (env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'main') {
-                            env.IS_PRODUCTION_DEPLOY = 'true'
-                            echo "🚀 Despliegue a PRODUCCIÓN detectado"
-                        }
-                        
-                        if (!env.SERVICES_TO_BUILD || env.SERVICES_TO_BUILD.trim() == '') {
-                            error "No se detectaron microservicios para construir"
-                        }
-                        
+
                     } catch (Exception e) {
-                        echo "❌ Error crítico detectando servicios: ${e.getMessage()}"
-                        echo "🔧 Intentando detección de emergencia..."
-                        
-                        // Emergency fallback: detect based on directory structure
-                        def emergencyServices = []
+                        echo "⚠️ Error o fallback: ${e.getMessage()}"
+                        echo "🔧 Intentando detección de emergencia basada en directorios..."
                         def possibleServices = [
                             'api-gateway', 'service-discovery', 'cloud-config',
                             'user-service', 'product-service', 'order-service',
@@ -243,22 +120,31 @@ pipeline {
                             'proxy-client'
                         ]
                         
-                        possibleServices.each { service ->
+                        servicesToBuildList = possibleServices.findAll { service ->
                             if (fileExists("${service}/pom.xml")) {
-                                emergencyServices.add(service)
                                 echo "🚨 Servicio de emergencia encontrado: ${service}"
+                                return true
                             }
+                            return false
                         }
-                        
-                        if (emergencyServices.size() > 0) {
-                            env.SERVICES_TO_BUILD = emergencyServices.join(',')
-                            echo "🆘 Servicios de emergencia: ${env.SERVICES_TO_BUILD}"
-                            currentBuild.result = 'UNSTABLE'
-                        } else {
-                            env.SERVICES_TO_BUILD = 'user-service'  // Absolute fallback
-                            echo "🚨 Fallback absoluto: user-service"
-                            currentBuild.result = 'UNSTABLE'
-                        }
+                    }
+
+                    // Asignación final y validación
+                    if (!servicesToBuildList.isEmpty()) {
+                        env.SERVICES_TO_BUILD = servicesToBuildList.join(',')
+                        echo "✅ Servicios a construir establecidos: ${env.SERVICES_TO_BUILD}"
+                    } else {
+                        // Fallback absoluto si todo falla
+                        echo "❌ Fallback absoluto. No se detectó ningún servicio."
+                        env.SERVICES_TO_BUILD = 'user-service,product-service' // Un default seguro
+                        currentBuild.result = 'UNSTABLE'
+                        echo "🆘 Estableciendo servicios por defecto: ${env.SERVICES_TO_BUILD}"
+                    }
+                    
+                    // Lógica adicional del stage
+                    if (env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'main') {
+                        env.IS_PRODUCTION_DEPLOY = 'true'
+                        echo "🚀 Despliegue a PRODUCCIÓN detectado"
                     }
                 }
             }
