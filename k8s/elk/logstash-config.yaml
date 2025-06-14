@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: logging
+data:
+  logstash.yml: |
+    http.host: 0.0.0.0
+    pipeline.ecs_compatibility: disabled
+  pipelines.yml: |
+    - pipeline.id: ecommerce
+      path.config: "/usr/share/logstash/pipeline/logstash.conf"
+  log4j2.properties: |
+    logger.logstashpipeline.name = logstash.inputs.beats
+    logger.logstashpipeline.level = info
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-pipeline
+  namespace: logging
+data:
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+    filter {
+      # Parsear logs JSON
+      if [message] =~ /^\{.*\}$/ {
+        json {
+          source => "message"
+        }
+      }
+      
+      # Agregar campos específicos para ecommerce
+      if [kubernetes][container][name] {
+        mutate {
+          add_field => { "service_name" => "%{[kubernetes][container][name]}" }
+        }
+      }
+      
+      # Filtros específicos por servicio
+      if [service_name] == "api-gateway" {
+        mutate {
+          add_field => { "service_type" => "gateway" }
+        }
+      } else if [service_name] == "order-service" {
+        mutate {
+          add_field => { "service_type" => "business" }
+        }
+      } else if [service_name] == "payment-service" {
+        mutate {
+          add_field => { "service_type" => "business" }
+        }
+      } else if [service_name] == "user-service" {
+        mutate {
+          add_field => { "service_type" => "business" }
+        }
+      }
+    }
+    output {
+      elasticsearch {
+        index => "ecommerce-logs-%{+YYYY.MM.dd}"
+        hosts => [ "${ES_HOSTS}" ]
+        user => "${ES_USER}"
+        password => "${ES_PASSWORD}"
+        ssl => true
+        ssl_certificate_verification => false
+      }
+    }
+    

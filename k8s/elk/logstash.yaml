@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+      - name: logstash
+        image: docker.elastic.co/logstash/logstash:8.13.4
+        ports:
+        - containerPort: 5044
+          name: beats
+        env:
+        - name: ES_HOSTS
+          value: "https://ecommerce-elasticsearch-es-http.logging.svc:9200"
+        - name: ES_USER
+          value: "elastic"
+        - name: ES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-elasticsearch-es-elastic-user
+              key: elastic
+        volumeMounts:
+        - name: config-volume
+          mountPath: /usr/share/logstash/config
+        - name: pipeline-volume
+          mountPath: /usr/share/logstash/pipeline
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 500m
+          limits:
+            memory: 2Gi
+            cpu: 1
+      volumes:
+      - name: config-volume
+        configMap:
+          name: logstash-config
+      - name: pipeline-volume
+        configMap:
+          name: logstash-pipeline
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: logging
+spec:
+  ports:
+  - port: 5044
+    targetPort: 5044
+    name: beats
+  selector:
+    app: logstash
