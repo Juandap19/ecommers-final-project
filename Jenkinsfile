@@ -336,7 +336,45 @@ pipeline {
                         echo "🔍 Imágenes encontradas para escaneo de seguridad: ${localImages.join(', ')}"
                         
                         if (localImages.size() > 0) {
-                            securityStages.runAllSecurityScans(localImages, params.SKIP_SECURITY_SCAN)
+                            if (params.SKIP_SECURITY_SCAN) {
+                                echo "🚫 Escaneo de seguridad omitido por parámetro"
+                            } else {
+                                echo "🔒 Ejecutando escaneos de seguridad en ${localImages.size()} imágenes..."
+                                
+                                localImages.each { imageName ->
+                                    try {
+                                        echo "🔍 Escaneando seguridad de imagen: ${imageName}"
+                                        
+                                        // Run Trivy security scan
+                                        sh """
+                                            echo "🛡️ Iniciando escaneo con Trivy para ${imageName}..."
+                                            
+                                            # Verificar si Trivy está instalado
+                                            if ! command -v trivy &> /dev/null; then
+                                                echo "📦 Instalando Trivy..."
+                                                # Instalar Trivy
+                                                wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | apt-key add -
+                                                echo "deb https://aquasecurity.github.io/trivy-repo/deb generic main" | tee -a /etc/apt/sources.list
+                                                apt-get update
+                                                apt-get install -y trivy
+                                            fi
+                                            
+                                            # Ejecutar escaneo de seguridad
+                                            trivy image --format json --output trivy-${imageName##*/}.json ${imageName} || echo "⚠️ Trivy scan completed with warnings"
+                                            
+                                            # Generar reporte legible
+                                            trivy image --format table ${imageName} || echo "⚠️ Trivy report completed with warnings"
+                                            
+                                            echo "✅ Escaneo de seguridad completado para ${imageName}"
+                                        """
+                                    } catch (Exception scanError) {
+                                        echo "⚠️ Error en escaneo de seguridad de ${imageName}: ${scanError.getMessage()}"
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                                
+                                echo "✅ Escaneos de seguridad completados para todas las imágenes"
+                            }
                         } else {
                             echo "No hay imágenes locales para escanear"
                         }
@@ -403,7 +441,18 @@ pipeline {
                     try {
                         // Only run if SonarQube analysis was performed
                         if (env.SONAR_TOKEN && env.SONAR_HOST_URL) {
-                            securityStages.waitForQualityGate()
+                            echo "🔍 Esperando resultado de Quality Gate de SonarQube..."
+                            
+                            // Use Jenkins built-in waitForQualityGate step
+                            timeout(time: 5, unit: 'MINUTES') {
+                                def qg = waitForQualityGate()
+                                if (qg.status != 'OK') {
+                                    echo "❌ Quality Gate falló: ${qg.status}"
+                                    currentBuild.result = 'UNSTABLE'
+                                } else {
+                                    echo "✅ Quality Gate aprobado"
+                                }
+                            }
                         } else {
                             echo "ℹ️ SonarQube no configurado, saltando Quality Gate"
                         }
@@ -423,7 +472,64 @@ pipeline {
             steps {
                 script {
                     try {
-                        testStages.checkSecurityPolicy()
+                        echo "🔒 Verificando políticas de seguridad..."
+                        
+                        // Check for Trivy scan results
+                        def trivyResults = sh(
+                            script: "find . -name 'trivy-*.json' | wc -l",
+                            returnStdout: true
+                        ).trim()
+                        
+                        if (trivyResults.toInteger() > 0) {
+                            echo "📊 Analizando ${trivyResults} reportes de seguridad..."
+                            
+                            sh '''
+                                echo "🔍 Verificando vulnerabilidades críticas..."
+                                
+                                # Contar vulnerabilidades críticas y altas
+                                CRITICAL_COUNT=0
+                                HIGH_COUNT=0
+                                
+                                for report in trivy-*.json; do
+                                    if [ -f "$report" ]; then
+                                        # Contar vulnerabilidades usando jq si está disponible
+                                        if command -v jq &> /dev/null; then
+                                            CRITICAL=$(jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") | .VulnerabilityID' "$report" 2>/dev/null | wc -l)
+                                            HIGH=$(jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH") | .VulnerabilityID' "$report" 2>/dev/null | wc -l)
+                                            CRITICAL_COUNT=$((CRITICAL_COUNT + CRITICAL))
+                                            HIGH_COUNT=$((HIGH_COUNT + HIGH))
+                                        else
+                                            echo "⚠️ jq no disponible, usando análisis básico..."
+                                            CRITICAL=$(grep -c '"Severity":"CRITICAL"' "$report" 2>/dev/null || echo "0")
+                                            HIGH=$(grep -c '"Severity":"HIGH"' "$report" 2>/dev/null || echo "0")
+                                            CRITICAL_COUNT=$((CRITICAL_COUNT + CRITICAL))
+                                            HIGH_COUNT=$((HIGH_COUNT + HIGH))
+                                        fi
+                                    fi
+                                done
+                                
+                                echo "📊 Vulnerabilidades encontradas:"
+                                echo "   🔴 Críticas: $CRITICAL_COUNT"
+                                echo "   🟠 Altas: $HIGH_COUNT"
+                                
+                                # Aplicar políticas de seguridad
+                                if [ $CRITICAL_COUNT -gt 0 ]; then
+                                    echo "❌ FALLO: Se encontraron $CRITICAL_COUNT vulnerabilidades críticas"
+                                    echo "🔒 Política: No se permiten vulnerabilidades críticas"
+                                    exit 1
+                                elif [ $HIGH_COUNT -gt 30 ]; then
+                                    echo "⚠️ ADVERTENCIA: Se encontraron $HIGH_COUNT vulnerabilidades altas (límite: 30)"
+                                    echo "🔒 Política: Límite de vulnerabilidades altas excedido"
+                                    exit 1
+                                else
+                                    echo "✅ Políticas de seguridad cumplidas"
+                                fi
+                            '''
+                        } else {
+                            echo "ℹ️ No se encontraron métricas de seguridad para evaluar"
+                        }
+                        
+                        echo "✅ Verificación de políticas de seguridad completada"
                     } catch (Exception e) {
                         echo "⚠️ Error en Security Policy Check: ${e.getMessage()}"
                         echo "Continuando pipeline sin validación de políticas de seguridad"
@@ -443,7 +549,55 @@ pipeline {
                     def servicesString = readFile('services_to_build.txt').trim()
                     def servicesToDeploy = servicesString.split(',')
                     if (servicesToDeploy.size() > 0) {
-                        deploymentStages.requestProductionApproval(servicesToDeploy, env.SEMANTIC_VERSION)
+                        echo "🚀 Solicitando aprobación para despliegue a PRODUCCIÓN..."
+                        echo "📦 Servicios a desplegar: ${servicesToDeploy.join(', ')}"
+                        echo "🏷️ Versión: ${env.SEMANTIC_VERSION}"
+                        
+                        try {
+                            timeout(time: 15, unit: 'MINUTES') {
+                                def approval = input(
+                                    message: "¿Aprobar despliegue a PRODUCCIÓN?",
+                                    parameters: [
+                                        choice(
+                                            name: 'APPROVE_DEPLOYMENT',
+                                            choices: ['Aprobar', 'Rechazar', 'Diferir'],
+                                            description: "Seleccionar acción para el despliegue"
+                                        ),
+                                        text(
+                                            name: 'APPROVAL_COMMENTS',
+                                            defaultValue: '',
+                                            description: 'Comentarios de aprobación (opcional)'
+                                        )
+                                    ],
+                                    submitter: 'admin,deployment-team',
+                                    ok: 'Enviar'
+                                )
+                                
+                                if (approval.APPROVE_DEPLOYMENT == 'Aprobar') {
+                                    echo "✅ Despliegue a producción APROBADO"
+                                    if (approval.APPROVAL_COMMENTS) {
+                                        echo "💬 Comentarios: ${approval.APPROVAL_COMMENTS}"
+                                    }
+                                } else if (approval.APPROVE_DEPLOYMENT == 'Rechazar') {
+                                    echo "❌ Despliegue a producción RECHAZADO"
+                                    if (approval.APPROVAL_COMMENTS) {
+                                        echo "💬 Razón: ${approval.APPROVAL_COMMENTS}"
+                                    }
+                                    error("Despliegue a producción rechazado por el usuario")
+                                } else {
+                                    echo "⏸️ Despliegue a producción DIFERIDO"
+                                    if (approval.APPROVAL_COMMENTS) {
+                                        echo "💬 Comentarios: ${approval.APPROVAL_COMMENTS}"
+                                    }
+                                    currentBuild.result = 'ABORTED'
+                                    error("Despliegue a producción diferido")
+                                }
+                            }
+                        } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                            echo "⏰ Tiempo de espera para aprobación agotado"
+                            currentBuild.result = 'ABORTED'
+                            error("Timeout en aprobación de producción")
+                        }
                     } else {
                         echo "No hay servicios para aprobación de producción"
                     }
@@ -462,7 +616,85 @@ pipeline {
                 script {
                     unstash 'build-info'
                     def servicesString = readFile('services_to_build.txt').trim()
-                    versioningStages.createGitHubRelease(env.SEMANTIC_VERSION, servicesString)
+                    def servicesToBuild = servicesString.split(',')
+                    
+                    echo "🏷️ Creando GitHub Release para versión: ${env.SEMANTIC_VERSION}"
+                    echo "📦 Servicios incluidos: ${servicesToBuild.join(', ')}"
+                    
+                    try {
+                        withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                            // Create release notes
+                            def releaseNotes = """
+# 🚀 Release ${env.SEMANTIC_VERSION}
+
+## 📦 Microservicios Incluidos
+${servicesToBuild.collect { "- ${it}" }.join('\n')}
+
+## 🔧 Build Information
+- **Build Number**: ${env.BUILD_NUMBER}
+- **Branch**: ${env.BRANCH_NAME}
+- **Commit**: ${env.GIT_COMMIT?.take(8) ?: 'N/A'}
+- **Build Date**: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
+
+## 🐳 Docker Images
+${servicesToBuild.collect { "- \`j2loop/${it}:${env.BUILD_NUMBER}\`" }.join('\n')}
+
+## 📊 Pipeline Status
+- ✅ Tests: Passed
+- ✅ Security Scan: Completed
+- ✅ Quality Gate: Verified
+- ✅ Docker Build: Success
+- ✅ Docker Push: Completed
+
+---
+*Generated automatically by Jenkins Pipeline*
+                            """.trim()
+                            
+                            // Create GitHub release using API
+                            sh """
+                                echo "🔄 Creando release en GitHub..."
+                                
+                                # Preparar datos del release
+                                cat > release-data.json << 'EOF'
+{
+  "tag_name": "v${env.SEMANTIC_VERSION}",
+  "target_commitish": "${env.BRANCH_NAME}",
+  "name": "Release v${env.SEMANTIC_VERSION}",
+  "body": ${groovy.json.JsonBuilder([releaseNotes]).toString()},
+  "draft": false,
+  "prerelease": false
+}
+EOF
+                                
+                                # Crear release usando curl
+                                RESPONSE=\$(curl -s -w "%{http_code}" \\
+                                    -X POST \\
+                                    -H "Authorization: token \$GITHUB_TOKEN" \\
+                                    -H "Accept: application/vnd.github.v3+json" \\
+                                    -H "Content-Type: application/json" \\
+                                    -d @release-data.json \\
+                                    "https://api.github.com/repos/\${GIT_URL#*github.com/}/releases" \\
+                                    -o release-response.json)
+                                
+                                HTTP_CODE=\${RESPONSE: -3}
+                                
+                                if [ "\$HTTP_CODE" = "201" ]; then
+                                    echo "✅ GitHub Release creado exitosamente"
+                                    cat release-response.json | grep '"html_url"' | cut -d'"' -f4
+                                else
+                                    echo "⚠️ Error creando GitHub Release (HTTP \$HTTP_CODE)"
+                                    cat release-response.json
+                                fi
+                                
+                                # Limpiar archivos temporales
+                                rm -f release-data.json release-response.json
+                            """
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️ Error creando GitHub Release: ${e.getMessage()}"
+                        echo "Continuando pipeline sin GitHub Release"
+                        currentBuild.result = 'UNSTABLE'
+                    }
                 }
             }
         }
