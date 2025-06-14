@@ -54,7 +54,7 @@ pipeline {
         
         // Variables dinámicas
         SEMANTIC_VERSION = ''
-        IS_PRODUCTION_DEPLOY = 'false'
+        IS_PRODUCTION_DEPLOY = 'true'
         SERVICES_TO_BUILD = ''
         LOCAL_IMAGES = ''
         BUILT_IMAGES = ''
@@ -145,6 +145,7 @@ pipeline {
                         env.IS_PRODUCTION_DEPLOY = 'true'
                         echo "🚀 Despliegue a PRODUCCIÓN detectado"
                     }
+                    env.IS_PRODUCTION_DEPLOY = 'true'
                 }
             }
         }
@@ -541,9 +542,7 @@ pipeline {
         }
         
         stage('Production Approval') {
-            when {
-                expression { env.IS_PRODUCTION_DEPLOY == 'true' }
-            }
+           
             steps {
                 script {
                     unstash 'build-info'
@@ -607,12 +606,7 @@ pipeline {
         }
         
         stage('GitHub Release') {
-            when {
-                anyOf {
-                    branch 'master'
-                    branch 'main'
-                }
-            }
+          
             steps {
                 script {
                     unstash 'build-info'
