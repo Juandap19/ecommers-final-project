@@ -148,8 +148,15 @@ pipeline {
                     def servicesString = readFile('services_to_build.txt').trim()
                     def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
+                        echo "🧪 Ejecutando tests para servicios: ${servicesToBuild.join(', ')}"
                         try {
-                            testStages.runAllTests(servicesToBuild)
+                            // Run unit tests using local function
+                            runUnitTests(servicesToBuild)
+                            
+                            // Run integration tests using local function
+                            runIntegrationTests(servicesToBuild)
+                            
+                            echo "✅ Todos los tests completados exitosamente"
                         } catch (Exception e) {
                             echo "⚠️ Error ejecutando tests: ${e.getMessage()}"
                             echo "Continuando pipeline con tests fallidos"
