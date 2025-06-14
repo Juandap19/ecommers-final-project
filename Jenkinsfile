@@ -150,13 +150,21 @@ pipeline {
                     if (servicesToBuild.size() > 0) {
                         echo "🧪 Ejecutando tests para servicios: ${servicesToBuild.join(', ')}"
                         try {
-                            // Run unit tests using local function
-                            runUnitTests(servicesToBuild)
-                            
-                            // Run integration tests using local function
-                            runIntegrationTests(servicesToBuild)
-                            
-                            echo "✅ Todos los tests completados exitosamente"
+                            // Run tests for each service directly
+                            servicesToBuild.each { service ->
+                                echo "🧪 Ejecutando tests para ${service}..."
+                                try {
+                                    sh """
+                                        echo "Ejecutando tests para ${service}..."
+                                        ./mvnw test -pl ${service} -am
+                                        echo "✅ Tests completados para ${service}"
+                                    """
+                                } catch (Exception serviceError) {
+                                    echo "⚠️ Error en tests de ${service}: ${serviceError.getMessage()}"
+                                    currentBuild.result = 'UNSTABLE'
+                                }
+                            }
+                            echo "✅ Todos los tests completados"
                         } catch (Exception e) {
                             echo "⚠️ Error ejecutando tests: ${e.getMessage()}"
                             echo "Continuando pipeline con tests fallidos"
@@ -171,15 +179,23 @@ pipeline {
                 always {
                     script {
                         try {
-                            if (env.SERVICES_TO_BUILD) {
-                                generateTestSummaryReport(
-                                    env.BUILD_NUMBER, 
-                                    env.BRANCH_NAME, 
-                                    env.SERVICES_TO_BUILD
-                                )
+                            // Publish test results for all services
+                            unstash 'build-info'
+                            def servicesString = readFile('services_to_build.txt').trim()
+                            def servicesToBuild = servicesString.split(',')
+                            
+                            servicesToBuild.each { service ->
+                                // Publish unit test results
+                                if (fileExists("${service}/target/surefire-reports/*.xml")) {
+                                    junit "${service}/target/surefire-reports/*.xml"
+                                }
+                                // Publish integration test results  
+                                if (fileExists("${service}/target/failsafe-reports/*.xml")) {
+                                    junit "${service}/target/failsafe-reports/*.xml"
+                                }
                             }
                         } catch (Exception e) {
-                            echo "⚠️ Error generando reporte de tests: ${e.getMessage()}"
+                            echo "⚠️ Error publicando resultados de tests: ${e.getMessage()}"
                         }
                     }
                 }
@@ -453,12 +469,15 @@ def runUnitTests(List services) {
     echo "Ejecutando pruebas unitarias para servicios: ${services.join(', ')}"
     
     services.each { service ->
-        dir(service) {
+        try {
+            echo "🧪 Ejecutando pruebas unitarias para ${service}..."
             sh """
-                echo "🧪 Ejecutando pruebas unitarias para ${service}..."
-                ./mvnw test -Dtest.profile=unit
+                ./mvnw test -pl ${service} -am -Dtest.profile=unit
                 echo "✅ Pruebas unitarias completadas para ${service}"
             """
+        } catch (Exception e) {
+            echo "⚠️ Error en pruebas unitarias de ${service}: ${e.getMessage()}"
+            currentBuild.result = 'UNSTABLE'
         }
     }
     
@@ -469,12 +488,15 @@ def runIntegrationTests(List services) {
     echo "Ejecutando pruebas de integración para servicios: ${services.join(', ')}"
     
     services.each { service ->
-        dir(service) {
+        try {
+            echo "🔗 Ejecutando pruebas de integración para ${service}..."
             sh """
-                echo "🔗 Ejecutando pruebas de integración para ${service}..."
-                ./mvnw verify -Dtest.profile=integration
+                ./mvnw verify -pl ${service} -am -Dtest.profile=integration
                 echo "✅ Pruebas de integración completadas para ${service}"
             """
+        } catch (Exception e) {
+            echo "⚠️ Error en pruebas de integración de ${service}: ${e.getMessage()}"
+            currentBuild.result = 'UNSTABLE'
         }
     }
     
