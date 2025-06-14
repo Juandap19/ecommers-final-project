@@ -76,8 +76,15 @@ pipeline {
         stage('Detect Services') {
             steps {
                 script {
-                    def servicesToBuild = buildStages.detectServicesToBuild(params)
-                    env.SERVICES_TO_BUILD = servicesToBuild.join(',')
+                    try {
+                        def servicesToBuild = buildStages.detectServicesToBuild(params)
+                        env.SERVICES_TO_BUILD = servicesToBuild ? servicesToBuild.join(',') : ''
+                        echo "Servicios detectados para construir: ${env.SERVICES_TO_BUILD}"
+                    } catch (Exception e) {
+                        echo "Error detectando servicios: ${e.getMessage()}"
+                        env.SERVICES_TO_BUILD = ''
+                        currentBuild.result = 'UNSTABLE'
+                    }
                 }
             }
         }
@@ -85,18 +92,24 @@ pipeline {
         stage('Tests') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
-                    testStages.runAllTests(servicesToBuild)
+                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    if (servicesToBuild.size() > 0) {
+                        testStages.runAllTests(servicesToBuild)
+                    } else {
+                        echo "No hay servicios para probar"
+                    }
                 }
             }
             post {
                 always {
                     script {
-                        testStages.generateTestSummaryReport(
-                            env.BUILD_NUMBER, 
-                            env.BRANCH_NAME, 
-                            env.SERVICES_TO_BUILD
-                        )
+                        if (env.SERVICES_TO_BUILD) {
+                            generateTestSummaryReport(
+                                env.BUILD_NUMBER, 
+                                env.BRANCH_NAME, 
+                                env.SERVICES_TO_BUILD
+                            )
+                        }
                     }
                 }
             }
@@ -105,8 +118,12 @@ pipeline {
         stage('Package') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
-                    buildStages.packageMicroservices(servicesToBuild)
+                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    if (servicesToBuild.size() > 0) {
+                        buildStages.packageMicroservices(servicesToBuild)
+                    } else {
+                        echo "No hay servicios para empaquetar"
+                    }
                 }
             }
         }
@@ -114,10 +131,16 @@ pipeline {
         stage('Build Docker') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
-                    def images = buildStages.buildDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
-                    env.LOCAL_IMAGES = images.local.join(',')
-                    env.BUILT_IMAGES = images.built.join(',')
+                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    if (servicesToBuild.size() > 0) {
+                        def images = buildStages.buildDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
+                        env.LOCAL_IMAGES = images.local.join(',')
+                        env.BUILT_IMAGES = images.built.join(',')
+                    } else {
+                        echo "No hay servicios para construir imagenes Docker"
+                        env.LOCAL_IMAGES = ''
+                        env.BUILT_IMAGES = ''
+                    }
                 }
             }
         }
@@ -134,8 +157,12 @@ pipeline {
         stage('Push Images') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
-                    deploymentStages.pushDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
+                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    if (servicesToBuild.size() > 0) {
+                        deploymentStages.pushDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
+                    } else {
+                        echo "No hay servicios para subir imagenes"
+                    }
                 }
             }
         }
@@ -165,8 +192,12 @@ pipeline {
             }
             steps {
                 script {
-                    def servicesToDeploy = env.SERVICES_TO_BUILD.split(',')
-                    deploymentStages.requestProductionApproval(servicesToDeploy, env.SEMANTIC_VERSION)
+                    def servicesToDeploy = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    if (servicesToDeploy.size() > 0) {
+                        deploymentStages.requestProductionApproval(servicesToDeploy, env.SEMANTIC_VERSION)
+                    } else {
+                        echo "No hay servicios para aprobación de producción"
+                    }
                 }
             }
         }
@@ -188,8 +219,12 @@ pipeline {
         stage('Load Testing') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD.split(',')
-                    runLoadTests(servicesToBuild)
+                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    if (servicesToBuild.size() > 0) {
+                        runLoadTests(servicesToBuild)
+                    } else {
+                        echo "No hay servicios para pruebas de carga"
+                    }
                 }
             }
             post {
@@ -203,27 +238,32 @@ pipeline {
     post {
         always {
             script {
-                // Check the build status and call the correct notification function
-                if (currentBuild.result == 'SUCCESS') {
-                    notificationStages.sendSuccessNotification()
-                } else if (currentBuild.result == 'FAILURE') {
-                    notificationStages.sendFailureNotification()
-                } else if (currentBuild.result == 'UNSTABLE') {
-                    notificationStages.sendUnstableNotification()
-                } else if (currentBuild.result == 'ABORTED') {
-                    notificationStages.sendAbortedNotification()
+                try {
+                    // Check the build status and call the correct notification function
+                    if (currentBuild.result == 'SUCCESS') {
+                        notificationStages.sendSuccessNotification()
+                    } else if (currentBuild.result == 'FAILURE') {
+                        notificationStages.sendFailureNotification()
+                    } else if (currentBuild.result == 'UNSTABLE') {
+                        notificationStages.sendUnstableNotification()
+                    } else if (currentBuild.result == 'ABORTED') {
+                        notificationStages.sendAbortedNotification()
+                    }
+                } catch (Exception e) {
+                    echo "Error sending notification: ${e.getMessage()}"
                 }
-                notificationStages.cleanup("Pipeline cleanup completed")
+                
+                // Pipeline cleanup
+                echo "Pipeline cleanup completed"
+                
+                // Clean workspace if needed
+                try {
+                    cleanWs(deleteDirs: true, notFailBuild: true)
+                } catch (Exception e) {
+                    echo "Warning: Could not clean workspace: ${e.getMessage()}"
+                }
             }
-
-            
-                
-                    // This calls the cleanup function from your library, which is good practice
-                    
-                
-            
         }
-        
     }
 }
 
