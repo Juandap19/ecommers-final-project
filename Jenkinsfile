@@ -92,8 +92,20 @@ pipeline {
                         // First try the library function
                         def servicesToBuild = []
                         try {
-                            servicesToBuild = buildStages.detectServicesToBuild(params)
-                            echo "✅ Biblioteca compartida detectó servicios: ${servicesToBuild}"
+                            def detectedServices = buildStages.detectServicesToBuild(params)
+                            echo "✅ Biblioteca compartida detectó servicios: ${detectedServices}"
+                            echo "🔍 Tipo de datos: ${detectedServices.getClass()}"
+                            echo "🔍 Es lista: ${detectedServices instanceof List}"
+                            echo "🔍 Tamaño: ${detectedServices?.size()}"
+                            
+                            // Convert to proper list if needed
+                            if (detectedServices instanceof List) {
+                                servicesToBuild = detectedServices.findAll { it != null && it != '' }
+                            } else if (detectedServices) {
+                                servicesToBuild = [detectedServices.toString()]
+                            }
+                            
+                            echo "🎯 Servicios procesados: ${servicesToBuild}"
                         } catch (Exception libError) {
                             echo "⚠️ Error en biblioteca compartida: ${libError.getMessage()}"
                             echo "🔍 Detectando servicios automáticamente..."
@@ -164,8 +176,23 @@ pipeline {
                             }
                         }
                         
-                        env.SERVICES_TO_BUILD = servicesToBuild ? servicesToBuild.join(',') : ''
-                        echo "🔨 Servicios finales para construir: ${env.SERVICES_TO_BUILD}"
+                        // Safe conversion to string
+                        def servicesString = ''
+                        if (servicesToBuild && servicesToBuild.size() > 0) {
+                            try {
+                                servicesString = servicesToBuild.join(',')
+                                echo "✅ Join exitoso: ${servicesString}"
+                            } catch (Exception joinError) {
+                                echo "⚠️ Error en join: ${joinError.getMessage()}"
+                                // Fallback: manual concatenation
+                                servicesString = servicesToBuild.collect { it.toString() }.join(',')
+                                echo "✅ Join manual: ${servicesString}"
+                            }
+                        }
+                        
+                        env.SERVICES_TO_BUILD = servicesString
+                        echo "🔨 Servicios finales para construir: '${env.SERVICES_TO_BUILD}'"
+                        echo "🔨 Longitud del string: ${env.SERVICES_TO_BUILD?.length()}"
                         
                         // Determinar si es despliegue a producción (como en shared library)
                         if (env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'main') {
@@ -173,15 +200,39 @@ pipeline {
                             echo "🚀 Despliegue a PRODUCCIÓN detectado"
                         }
                         
-                        if (!env.SERVICES_TO_BUILD) {
+                        if (!env.SERVICES_TO_BUILD || env.SERVICES_TO_BUILD.trim() == '') {
                             error "No se detectaron microservicios para construir"
                         }
                         
                     } catch (Exception e) {
                         echo "❌ Error crítico detectando servicios: ${e.getMessage()}"
-                        env.SERVICES_TO_BUILD = ''
-                        currentBuild.result = 'FAILURE'
-                        error "No se pudieron detectar los microservicios"
+                        echo "🔧 Intentando detección de emergencia..."
+                        
+                        // Emergency fallback: detect based on directory structure
+                        def emergencyServices = []
+                        def possibleServices = [
+                            'api-gateway', 'service-discovery', 'cloud-config',
+                            'user-service', 'product-service', 'order-service',
+                            'payment-service', 'shipping-service', 'favourite-service',
+                            'proxy-client'
+                        ]
+                        
+                        possibleServices.each { service ->
+                            if (fileExists("${service}/pom.xml")) {
+                                emergencyServices.add(service)
+                                echo "🚨 Servicio de emergencia encontrado: ${service}"
+                            }
+                        }
+                        
+                        if (emergencyServices.size() > 0) {
+                            env.SERVICES_TO_BUILD = emergencyServices.join(',')
+                            echo "🆘 Servicios de emergencia: ${env.SERVICES_TO_BUILD}"
+                            currentBuild.result = 'UNSTABLE'
+                        } else {
+                            env.SERVICES_TO_BUILD = ''
+                            currentBuild.result = 'FAILURE'
+                            error "No se pudieron detectar los microservicios"
+                        }
                     }
                 }
             }
