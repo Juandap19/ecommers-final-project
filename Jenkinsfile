@@ -89,24 +89,20 @@ pipeline {
             steps {
                 script {
                     echo "🔍 Inicializando detección de servicios..."
-                    def servicesToBuildList = [] // Usar siempre una variable local para la lógica
+                    def servicesToBuildList = []
 
                     try {
                         def detectedServices = buildStages.detectServicesToBuild(params)
                         echo "✅ Biblioteca compartió: ${detectedServices}"
-                        
-                        // Asegurarnos de que el resultado sea una lista limpia de strings
                         if (detectedServices instanceof List) {
                             servicesToBuildList = detectedServices.collect { it.toString() }.findAll { !it.isEmpty() }
                         } else if (detectedServices) {
                             servicesToBuildList = [detectedServices.toString()]
                         }
-
                     } catch (e) {
                         echo "⚠️ Error llamando a la biblioteca: ${e.message}. Usando fallback."
                     }
                     
-                    // Si la lista está vacía después del primer intento, usar el fallback
                     if (servicesToBuildList.isEmpty()) {
                         echo "🔧 Lógica de emergencia activada..."
                         def possibleServices = [
@@ -115,34 +111,27 @@ pipeline {
                             'payment-service', 'shipping-service', 'favourite-service',
                             'proxy-client'
                         ]
-                        servicesToBuildList = possibleServices.findAll { service -> 
-                            fileExists("${service}/pom.xml") 
-                        }
+                        servicesToBuildList = possibleServices.findAll { service -> fileExists("${service}/pom.xml") }
                     }
                     
-                    // Si AÚN está vacía, usar un valor por defecto para no romper el pipeline
                     if (servicesToBuildList.isEmpty()) {
                         echo "🚨 Fallback absoluto: No se pudo detectar ningún servicio."
-                        servicesToBuildList = ['user-service', 'product-service'] // Un valor por defecto seguro
+                        servicesToBuildList = ['user-service', 'product-service']
                         currentBuild.result = 'UNSTABLE'
                     }
 
-                    // --- PARTE CRÍTICA DE LA SOLUCIÓN ---
-                    // 1. Crear el string final en una variable local.
                     def servicesString = servicesToBuildList.join(',')
                     
-                    // 2. Asignar la variable local al entorno de Jenkins.
-                    env.SERVICES_TO_BUILD = servicesString
+                    // --- LA SOLUCIÓN DEFINITIVA ---
+                    // Escribimos el resultado en un archivo en el workspace.
+                    writeFile file: 'services_to_build.txt', text: servicesString
                     
-                    // 3. Imprimir ambas variables para depuración. Esto nos dirá si la asignación funcionó.
-                    echo "-> VALOR LOCAL A ASIGNAR: '${servicesString}'"
-                    echo "-> VALOR EN ENV DESPUÉS DE ASIGNAR: '${env.SERVICES_TO_BUILD}'"
-
-                    // Validar que la variable de entorno no esté vacía antes de continuar
-                    if (!env.SERVICES_TO_BUILD) {
-                        error("¡FALLO CRÍTICO! No se pudo establecer la variable SERVICES_TO_BUILD.")
-                    }
-
+                    echo "✅ Servicios detectados y guardados en 'services_to_build.txt': ${servicesString}"
+                    
+                    // Usamos 'stash' para asegurar que el archivo esté disponible para las siguientes etapas,
+                    // incluso si se ejecutan en diferentes agentes.
+                    stash name: 'build-info', includes: 'services_to_build.txt'
+                    
                     // Lógica adicional del stage
                     if (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') {
                         env.IS_PRODUCTION_DEPLOY = 'true'
@@ -191,7 +180,9 @@ pipeline {
         stage('Package') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
                         try {
                             buildStages.packageMicroservices(servicesToBuild)
@@ -232,7 +223,9 @@ pipeline {
         stage('Build Docker') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
                         try {
                             def images = buildStages.buildDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
@@ -311,7 +304,9 @@ pipeline {
         stage('Push Images') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
                         deploymentStages.pushDockerImages(servicesToBuild, env.DOCKERHUB_USERNAME)
                     } else {
@@ -363,7 +358,9 @@ pipeline {
             }
             steps {
                 script {
-                    def servicesToDeploy = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    def servicesToDeploy = servicesString.split(',')
                     if (servicesToDeploy.size() > 0) {
                         deploymentStages.requestProductionApproval(servicesToDeploy, env.SEMANTIC_VERSION)
                     } else {
@@ -382,7 +379,9 @@ pipeline {
             }
             steps {
                 script {
-                    versioningStages.createGitHubRelease(env.SEMANTIC_VERSION, env.SERVICES_TO_BUILD)
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    versioningStages.createGitHubRelease(env.SEMANTIC_VERSION, servicesString)
                 }
             }
         }
@@ -390,7 +389,9 @@ pipeline {
         stage('Load Testing') {
             steps {
                 script {
-                    def servicesToBuild = env.SERVICES_TO_BUILD?.split(',') ?: []
+                    unstash 'build-info'
+                    def servicesString = readFile('services_to_build.txt').trim()
+                    def servicesToBuild = servicesString.split(',')
                     if (servicesToBuild.size() > 0) {
                         runLoadTests(servicesToBuild)
                     } else {
