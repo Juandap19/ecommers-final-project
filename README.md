@@ -684,11 +684,40 @@ Monitorea al monitor mismo, asegurando que tu sistema de observabilidad funcione
 
 
 #### Alertas
+![Prometheus Overview](image-14.png)
+## Configuración de Alertas en ELK Stack
+
+El sistema de alertas está configurado en Kibana para monitorear patrones específicos en los logs y métricas recolectadas. Las alertas se activan cuando se cumplen ciertas condiciones predefinidas, permitiendo una respuesta rápida a incidentes.
+
+### Tipos de Alertas Configuradas
+
+- **Alertas de Error**: Se activan cuando aparecen errores críticos en los logs de aplicaciones
+- **Alertas de Latencia**: Monitorean cuando los tiempos de respuesta superan umbrales predefinidos
+- **Alertas de Disponibilidad**: Detectan cuando un servicio deja de responder
+- **Alertas de Seguridad**: Identifican patrones sospechosos en los logs (intentos de acceso fallidos múltiples)
+
+### Configuración de Reglas en Kibana
+
+Como se muestra en la imagen, las reglas de alerta en Kibana están configuradas con:
+
+1. **Condiciones de activación**: Expresiones que definen cuándo se dispara una alerta
+2. **Período de evaluación**: Frecuencia con la que se evalúan las condiciones
+3. **Acciones**: Respuestas automatizadas cuando se activa una alerta (notificaciones)
+4. **Silenciamiento**: Períodos programados donde no se envían notificaciones
+
+### Integración con Canales de Notificación
+
+Las alertas están integradas con múltiples canales para asegurar que el equipo adecuado reciba las notificaciones:
+
+- Slack (alertas de prioridad alta)
+- Email (resúmenes diarios y alertas de prioridad media)
+- Webhook para integración con sistemas de tickets
+- PagerDuty para incidentes críticos fuera de horario laboral
 
 * Reglas configuradas
 * Notificaciones por canal (Slack, email, etc.)
 
-
+![Prometheus Overview](image-15.png)
 # FALTA 
 
 #### Métricas de negocio
