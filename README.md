@@ -124,6 +124,8 @@ PARA ESTAS PRUEBAS QUE YA FUERON IMPLEMENTADAS Y PROBADAS ANTERIORMENTE POR FAVO
 
 * ❌ **Seguridad (OWASP)**: **No implementadas aún**, dejar como pendiente o en backlog
 
+# FALTA 
+
 ### 📊 Informes de Cobertura
 
 * Herramientas utilizadas (JaCoCo, SonarQube, etc.)
@@ -133,15 +135,10 @@ PARA ESTAS PRUEBAS QUE YA FUERON IMPLEMENTADAS Y PROBADAS ANTERIORMENTE POR FAVO
 
 ---
 
-## 8. Gestión de Cambios
+## 8. Release notes
 
-### 📌 Proceso de Change Management
+# Falta 
 
-* ¿Cómo se aprueban los cambios?
-* ¿Quién autoriza qué y cuándo?
-* Herramientas utilizadas (JIRA, Confluence, etc.)
-
-# FALTA 
 
 
 ---
@@ -450,25 +447,12 @@ Monitorea al monitor mismo, asegurando que tu sistema de observabilidad funcione
 * Reglas configuradas
 * Notificaciones por canal (Slack, email, etc.)
 
-# FALTA 
-
-#### Tracing distribuido
-
-* Herramienta utilizada (Jaeger, Zipkin)
-* Ejemplo de trazabilidad completa de una transacción
-
-# FALTA 
-
-#### Health Checks
-
-* Configuración de liveness y readiness probes en Kubernetes
 
 # FALTA 
 
 #### Métricas de negocio
 
-* Tiempos de compra, conversiones, órdenes por día, etc.
-* Cómo se recolectan y visualizan
+
 
 # FALTA 
 
