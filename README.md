@@ -377,7 +377,8 @@ PARA ESTAS PRUEBAS QUE YA FUERON IMPLEMENTADAS Y PROBADAS ANTERIORMENTE POR FAVO
 
 ## 8. Release notes
 
-# Falta 
+# ![Zipkin Dashboard](image-13.png)
+!  [Zipkin Dashboard](image-12.png)
 
 
 
