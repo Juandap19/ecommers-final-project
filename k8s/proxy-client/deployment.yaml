@@ -52,20 +52,7 @@ spec:
           #   - name: config-volume
           #     mountPath: /etc/config
           # # Opcional: Liveness and Readiness Probes
-          livenessProbe:
-            httpGet:
-              path: /app/actuator/health
-              port: 8900
-            initialDelaySeconds: 200 
-            periodSeconds: 10
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /app/actuator/health
-              port: 8900
-            initialDelaySeconds: 200
-            periodSeconds: 10
-            failureThreshold: 3
+         
           volumeMounts:
           - name: common-config-volume
             mountPath: /app/config

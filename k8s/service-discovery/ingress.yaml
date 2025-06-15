@@ -1,0 +1,22 @@
+# ingress-eureka.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eureka-dashboard-ingress
+  namespace: default
+  annotations:
+    # Esta anotación es clave: le dice a NGINX que quite /eureka de la ruta
+    # antes de enviarla al pod de Eureka, que espera las peticiones en la raíz (/).
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /eureka   # Accederemos al dashboard a través de esta ruta
+        pathType: Prefix
+        backend:
+          service:
+            name: service-discovery # El nombre de tu servicio de Eureka
+            port:
+              number: 8761          # El puerto del servicio de Eureka

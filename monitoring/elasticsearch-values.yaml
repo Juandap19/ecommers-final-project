@@ -7,3 +7,5 @@ resources:
     memory: "2Gi"
 
 antiAffinity: "soft"
+nodeSelector:
+  cloud.google.com/gke-nodepool: pool-mas-recursos
