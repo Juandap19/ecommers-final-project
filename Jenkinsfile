@@ -621,7 +621,7 @@ pipeline {
                         withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
                             // Create release notes
                             def releaseNotes = """
-# 🚀 Release ${env.SEMANTIC_VERSION}
+# 🚀 Release v1.0.2
 
 ## 📦 Microservicios Incluidos
 ${servicesToBuild.collect { "- ${it}" }.join('\n')}
@@ -677,7 +677,7 @@ EOF
                                     "https://api.github.com/repos/\${GIT_URL#*github.com/}/releases" \\
                                     -o release-response.json)
                                 
-                                HTTP_CODE=\${RESPONSE: -3}
+                                 HTTP_CODE=\$(echo "\$RESPONSE" | tail -c 4 | head -c 3)
                                 
                                 if [ "\$HTTP_CODE" = "201" ]; then
                                     echo "✅ GitHub Release creado exitosamente"
