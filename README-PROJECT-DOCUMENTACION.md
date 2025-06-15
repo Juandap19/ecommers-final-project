@@ -797,10 +797,6 @@ These E2E tests are expected to run smoothly, as they play a key role in confirm
 
 ---
 
-
-
-
-
 ### LOCUST
 
 Locust is used to perform both **load** and **stress testing** on critical microservices, including `payment-service`, `order-service`, and `favourite-service`.
