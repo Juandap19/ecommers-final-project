@@ -1,4 +1,4 @@
-# kibana.yaml (versión modificada para HTTP)
+# kibana.yaml (versión corregida y completa)
 apiVersion: kibana.k8s.elastic.co/v1
 kind: Kibana
 metadata:
@@ -6,9 +6,15 @@ metadata:
 spec:
   version: 8.14.0 # Asegúrate de que coincida con la de tu Elasticsearch
   count: 1
-  elasticsearchRef:
-    name: quickstart
+  # Sección 1: Decimos a Kibana cómo exponerse ÉL MISMO (HTTP)
   http:
     tls:
       selfSignedCertificate:
-        disabled: true # <-- ¡Esta es la línea clave!
+        disabled: true # Correcto, para que Kibana escuche en HTTP
+
+  # Sección 2: Decimos a Kibana cómo conectarse A ELASTICSEARCH (HTTPS)
+  elasticsearchRef:
+    name: quickstart # El nombre de tu recurso de Elasticsearch
+    # No es estrictamente necesario añadir la sección 'secret' si los nombres
+    # coinciden (quickstart-es-http-ca-internal), pero ser explícito es mejor
+    # para depurar. El operador debería encontrarlo automáticamente.
