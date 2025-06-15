@@ -607,12 +607,7 @@ pipeline {
         }
         
         stage('GitHub Release') {
-            when {
-                anyOf {
-                    branch 'master'
-                    branch 'main'
-                }
-            }
+            
             steps {
                 script {
                     unstash 'build-info'
