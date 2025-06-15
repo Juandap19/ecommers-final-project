@@ -54,7 +54,7 @@ pipeline {
         
         // Variables dinámicas
         SEMANTIC_VERSION = ''
-        IS_PRODUCTION_DEPLOY = 'false'
+        IS_PRODUCTION_DEPLOY = 'true'
         SERVICES_TO_BUILD = ''
         LOCAL_IMAGES = ''
         BUILT_IMAGES = ''
