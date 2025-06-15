@@ -629,7 +629,6 @@ ${servicesToBuild.collect { "- ${it}" }.join('\n')}
 ## 🔧 Build Information
 - **Build Number**: ${env.BUILD_NUMBER}
 - **Branch**: main
-- "target_commitish": "${env.GIT_COMMIT}",
 - **Build Date**: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
 
 ## 🐳 Docker Images
