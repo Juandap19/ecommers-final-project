@@ -628,8 +628,8 @@ ${servicesToBuild.collect { "- ${it}" }.join('\n')}
 
 ## 🔧 Build Information
 - **Build Number**: ${env.BUILD_NUMBER}
-- **Branch**: ${env.BRANCH_NAME}
-- **Commit**: ${env.GIT_COMMIT?.take(8) ?: 'N/A'}
+- **Branch**: main
+- "target_commitish": "${env.GIT_COMMIT}",
 - **Build Date**: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
 
 ## 🐳 Docker Images
@@ -658,9 +658,9 @@ RELEASE_NOTES_EOF
                             
                             cat > release-data.json << EOF
 {
-  "tag_name": "v${env.SEMANTIC_VERSION}",
-  "target_commitish": "${env.BRANCH_NAME}",
-  "name": "Release v${env.SEMANTIC_VERSION}",
+  "tag_name": "v1.0.2",
+  "target_commitish": "main",
+  "name": "Release v1.0.2",
   "body": "\$ESCAPED_NOTES",
   "draft": false,
   "prerelease": false
