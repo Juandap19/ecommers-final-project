@@ -145,7 +145,6 @@ pipeline {
                         env.IS_PRODUCTION_DEPLOY = 'true'
                         echo "🚀 Despliegue a PRODUCCIÓN detectado"
                     }
-                    env.IS_PRODUCTION_DEPLOY = 'true'
                 }
             }
         }
@@ -542,7 +541,9 @@ pipeline {
         }
         
         stage('Production Approval') {
-           
+            when {
+                expression { env.IS_PRODUCTION_DEPLOY == 'true' }
+            }
             steps {
                 script {
                     unstash 'build-info'
@@ -606,7 +607,7 @@ pipeline {
         }
         
         stage('GitHub Release') {
-          
+            
             steps {
                 script {
                     unstash 'build-info'
@@ -649,13 +650,18 @@ ${servicesToBuild.collect { "- `j2loop/${it}:${env.BUILD_NUMBER}`" }.join('\n')}
                             sh """
                                 echo "🔄 Creando release en GitHub..."
                                 
-                                # Preparar datos del release
-                                cat > release-data.json << 'EOF'
+                                                            # Preparar datos del release (escapar JSON manualmente)
+                            ESCAPED_NOTES=\$(cat << 'RELEASE_NOTES_EOF' | sed 's/"/\\"/g' | sed ':a;N;\$!ba;s/\\n/\\\\n/g'
+${releaseNotes}
+RELEASE_NOTES_EOF
+)
+                            
+                            cat > release-data.json << EOF
 {
   "tag_name": "v${env.SEMANTIC_VERSION}",
   "target_commitish": "${env.BRANCH_NAME}",
   "name": "Release v${env.SEMANTIC_VERSION}",
-  "body": ${groovy.json.JsonBuilder([releaseNotes]).toString()},
+  "body": "\$ESCAPED_NOTES",
   "draft": false,
   "prerelease": false
 }

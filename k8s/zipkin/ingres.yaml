@@ -1,0 +1,22 @@
+# k8s/zipkin/ingres.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zipkin-dashboard-ingress
+  namespace: default
+  annotations:
+    # Reescribe la ruta para que Zipkin funcione correctamente
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      # Esta regla captura /zipkin y cualquier cosa después (ej: /zipkin/traces)
+      - path: /zipkin(/|$)(.*)
+        pathType: ImplementationSpecific # <-- ¡ESTE ES EL CAMBIO!
+        backend:
+          service:
+            name: zipkin # Usando el nombre corregido que te recomendé
+            port:
+              number: 9411

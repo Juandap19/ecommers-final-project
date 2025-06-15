@@ -1,20 +1,22 @@
+# ingress-nginx.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
- name: api-gateway-ingress
-#  annotations:
-#    nginx.ingress.kubernetes.io/rewrite-target: /
-#    kubernetes.io/ingress.class: "nginx"
+  name: api-gateway-ingress
+  # Especificamos el namespace donde están tus servicios, en este caso 'default'.
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
- ingressClassName: webapprouting.kubernetes.azure.com
- rules:
-   # La línea 'host: ecommerce.local' ha sido eliminada de aquí
-   - http:
-       paths:
-         - path: /
-           pathType: Prefix
-           backend:
-             service:
-               name: api-gateway
-               port:
-                 number: 8080
+  # Le decimos a Kubernetes que este Ingress es para 'nginx'.
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 8080

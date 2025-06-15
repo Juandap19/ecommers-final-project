@@ -40,20 +40,6 @@ spec:
          value: "api-gateway"
 
 
-       livenessProbe:
-         httpGet:
-           path: /actuator/health
-           port: 8080
-         initialDelaySeconds: 200
-         periodSeconds: 10
-         failureThreshold: 3
-       readinessProbe:
-         httpGet:
-           path: /actuator/health
-           port: 8080
-         initialDelaySeconds: 60
-         periodSeconds: 5
-         failureThreshold: 3
        volumeMounts:
        - name: common-config-volume
          mountPath: /app/config
